@@ -317,7 +317,7 @@ function vec3(a) {
   return new THREE.Vector3(a[0], a[1], a[2]);
 }
 
-function isosurface(points, values, n_real, isolevel) {
+function isosurface(points, values, size, isolevel) {
   // Vertices may occur along edges of cube, when the values at the edge's
   //   endpoints straddle the isolevel value.
   // Actual position along edge weighted according to function values.
@@ -325,9 +325,9 @@ function isosurface(points, values, n_real, isolevel) {
 
   var geometry = new THREE.Geometry();
   var vertexIndex = 0;
-  var size_x = n_real[0];
-  var size_y = n_real[1];
-  var size_z = n_real[2];
+  var size_x = size[0];
+  var size_y = size[1];
+  var size_z = size[2];
   if (size_x <= 0 || size_y <= 0 || size_z <= 0) {
     throw Error('Grid dimensions are zero along at least one edge');
   }
@@ -335,32 +335,33 @@ function isosurface(points, values, n_real, isolevel) {
   if (values.length !== size_xyz || points.length !== size_xyz) {
     throw Error('isosurface: array size mismatch');
   }
-
+  var vert_offsets = [];
+  var i;
+  for (i = 0; i < 8; ++i) {
+    var v = cubeVerts[i];
+    vert_offsets.push(v[0] + size_z * (v[1] + size_y * v[2]));
+  }
   var vertices = new Float32Array(8);
-  var n = 0;
-  for (var z = 0; z < size_z - 1; z++) {
+  var vertex_points = [null, null, null, null, null, null, null, null];
+  for (var x = 0; x < size_x - 1; x++) {
     for (var y = 0; y < size_y - 1; y++) {
-      for (var x = 0; x < size_x - 1; x++) {
-        // index of base point, and also adjacent points on cube
-        var vertex_points = [];
+      for (var z = 0; z < size_z - 1; z++) {
+        var j0 = z + size_z * (y + size_y * x);
         var cubeindex = 0;
-        var i;
         for (i = 0; i < 8; ++i) {
-          var v = cubeVerts[i];
-          var j = x + v[0] + n_real[0] * ((y + v[1]) + n_real[1] * (z + v[2]));
+          var j = j0 + vert_offsets[i];
           var s = values[j];
           vertices[i] = s;
-          vertex_points.push(points[j]);
+          vertex_points[i] = points[j];
           cubeindex |= (s < isolevel) ? 1 << i : 0;
         }
-        n++;
 
         // bits = 12 bit number,
         // indicates which edges are crossed by the isosurface
         var edge_mask = edgeTable[cubeindex];
 
         // if none are crossed, proceed to next iteration
-        if (edge_mask === 0) { continue; }
+        if (edge_mask === 0) continue;
         // check which edges are crossed, and estimate the point location
         //    using a weighted average of scalar values at edge endpoints.
         // store the vertex in an array for use later.
@@ -390,7 +391,6 @@ function isosurface(points, values, n_real, isolevel) {
           geometry.vertices.push(vec3(vlist[index3]));
           var face = new THREE.Face3(vertexIndex, vertexIndex+1, vertexIndex+2);
           geometry.faces.push(face);
-
           geometry.faceVertexUvs[0].push([new THREE.Vector2(0, 0),
                                           new THREE.Vector2(0, 1),
                                           new THREE.Vector2(1, 1)]);
@@ -409,4 +409,4 @@ function isosurface(points, values, n_real, isolevel) {
 return isosurface;
 })();
 
-if (typeof module !== 'undefined') { module.exports = isosurface; }
+if (typeof module !== 'undefined') module.exports = isosurface;

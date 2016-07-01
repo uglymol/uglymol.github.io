@@ -2,6 +2,7 @@
 var UnitCell = (function () {
 'use strict';
 
+// eslint-disable-next-line max-params
 function UnitCell(a /*:number*/, b /*:number*/, c /*:number*/,
                   alpha /*:number*/, beta /*:number*/, gamma /*:number*/) {
   if (a <= 0 || b <= 0 || c <= 0 || alpha <= 0 || beta <= 0 || gamma <= 0) {
@@ -37,7 +38,8 @@ function UnitCell(a /*:number*/, b /*:number*/, c /*:number*/,
     -(cos_gamma * cos_alpha_star_sin_beta + cos_beta * sin_gamma) /
         (sin_beta * s1rca2 * sin_gamma * a),
     0.0,
-    1.0 / (sin_gamma * b),  cos_alpha_star / (s1rca2 * sin_gamma * b),
+    1.0 / (sin_gamma * b),
+    cos_alpha_star / (s1rca2 * sin_gamma * b),
     0.0,
     0.0,
     1.0 / (sin_beta * s1rca2 * c)
@@ -57,4 +59,4 @@ function UnitCell(a /*:number*/, b /*:number*/, c /*:number*/,
 return UnitCell;
 })();
 
-if (typeof module !== 'undefined') { module.exports = UnitCell; }
+if (typeof module !== 'undefined') module.exports = UnitCell;
