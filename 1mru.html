@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <title>UglyMol - 1mru</title>
+  <title>1mru - UglyMol</title>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, user-scalable=no">
   <style>
@@ -47,12 +47,8 @@
    }
    a { color: #59C; }
   </style>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r77/three.min.js"></script>
-  <script src="src/unitcell.js"></script>
-  <script src="src/elmap.js"></script>
-  <script src="src/model.js"></script>
-  <script src="src/isosurface.js"></script>
-  <script src="src/viewer.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r78/three.min.js"></script>
+  <script src="uglymol.js"></script>
 </head>
 <body style="background-color: black">
   <div id="viewer" style="position: absolute; left:0px; top:0px;">
@@ -88,16 +84,16 @@
       Home/End = bond width
       (Shift+)space = next res.
 
-      <a href="https://github.com/uglymol/uglymol">about uglymol</a>
+      <a href="https://uglymol.github.io">about uglymol</a>
     </footer>
   </div>
   <div id="inset">
   <script>
     V = new Viewer("viewer");
-    V.load_pdb("data/1mru.pdb", "1mru");
-    V.load_map("data/1mru.omap", "2mFo-DFc", false, "dsn6");
+    V.load_pdb("data/1mru.pdb");
+    V.load_map("data/1mru.omap", false, "dsn6");
     //V.load_map("data/1mru_2mFo-DFc.ccp4", "2mFo-DFc", false, "ccp4");
-    V.load_map("data/1mru_diff.omap", "mFo-DFc", true, "dsn6");
+    V.load_map("data/1mru_diff.omap", true, "dsn6");
     //V.show_nav("inset");
     V.render();
   </script>
