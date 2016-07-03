@@ -155,7 +155,7 @@ function Atom() {
   this.resname = '';
   this.chain = '';
   this.chain_index = null;
-  this.resseq = '';
+  this.resseq = null;
   this.icode = null;
   this.xyz = [0, 0, 0];
   this.occ = 1.0;
@@ -182,7 +182,7 @@ Atom.prototype.from_pdb_line = function (pdb_line) {
   this.altloc = pdb_line.substring(16, 17).trim();
   this.resname = pdb_line.substring(17, 20).trim();
   this.chain = pdb_line.substring(20, 22).trim();
-  this.resseq = pdb_line.substring(22, 26);
+  this.resseq = parseInt(pdb_line.substring(22, 26), 10);
   this.icode = pdb_line.substring(26, 27).trim();
   var x = parseFloat(pdb_line.substring(30, 38));
   var y = parseFloat(pdb_line.substring(38, 46));
@@ -197,10 +197,6 @@ Atom.prototype.from_pdb_line = function (pdb_line) {
     this.charge = pdb_line.substring(78, 80).trim();
   }
   this.is_ligand = (NOT_LIGANDS.indexOf(this.resname) === -1);
-};
-
-Atom.prototype.resid = function () {
-  return this.resseq + this.icode;
 };
 
 Atom.prototype.b_as_u = function () {
@@ -342,7 +338,7 @@ Cubicles.prototype.get_nearby_atoms = function (box_id) {
 Model.prototype.calculate_connectivity = function () {
   var atoms = this.atoms;
   var cubes = new Cubicles(atoms, 3.0, this.lower_bound, this.upper_bound);
-  var cnt = 0;
+  //var cnt = 0;
   for (var i = 0; i < cubes.boxes.length; i++) {
     var box = cubes.boxes[i];
     if (box.length === 0) continue;
@@ -354,7 +350,7 @@ Model.prototype.calculate_connectivity = function () {
         if (j > atom_id && atoms[atom_id].is_bonded_to(atoms[j])) {
           atoms[atom_id].bonds.push(j);
           atoms[j].bonds.push(atom_id);
-          cnt++;
+          //cnt++;
         }
       }
     }
@@ -363,13 +359,15 @@ Model.prototype.calculate_connectivity = function () {
   this.cubes = cubes;
 };
 
-Model.prototype.get_nearest_atom = function (x, y, z) {
+Model.prototype.get_nearest_atom = function (x, y, z, atom_name) {
   var box_id = this.cubes.find_box_id(x, y, z);
   var indices = this.cubes.get_nearby_atoms(box_id);
   var nearest = null;
   var min_d2 = Infinity;
   for (var i = 0; i < indices.length; i++) {
     var atom = this.atoms[indices[i]];
+    if (atom_name !== undefined && atom_name !== null &&
+        atom_name !== atom.name) continue;
     var dx = atom.xyz[0] - x;
     var dy = atom.xyz[1] - y;
     var dz = atom.xyz[2] - z;

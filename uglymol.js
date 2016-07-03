@@ -245,7 +245,7 @@ function Atom() {
   this.resname = '';
   this.chain = '';
   this.chain_index = null;
-  this.resseq = '';
+  this.resseq = null;
   this.icode = null;
   this.xyz = [0, 0, 0];
   this.occ = 1.0;
@@ -272,7 +272,7 @@ Atom.prototype.from_pdb_line = function (pdb_line) {
   this.altloc = pdb_line.substring(16, 17).trim();
   this.resname = pdb_line.substring(17, 20).trim();
   this.chain = pdb_line.substring(20, 22).trim();
-  this.resseq = pdb_line.substring(22, 26);
+  this.resseq = parseInt(pdb_line.substring(22, 26), 10);
   this.icode = pdb_line.substring(26, 27).trim();
   var x = parseFloat(pdb_line.substring(30, 38));
   var y = parseFloat(pdb_line.substring(38, 46));
@@ -287,10 +287,6 @@ Atom.prototype.from_pdb_line = function (pdb_line) {
     this.charge = pdb_line.substring(78, 80).trim();
   }
   this.is_ligand = (NOT_LIGANDS.indexOf(this.resname) === -1);
-};
-
-Atom.prototype.resid = function () {
-  return this.resseq + this.icode;
 };
 
 Atom.prototype.b_as_u = function () {
@@ -432,7 +428,7 @@ Cubicles.prototype.get_nearby_atoms = function (box_id) {
 Model.prototype.calculate_connectivity = function () {
   var atoms = this.atoms;
   var cubes = new Cubicles(atoms, 3.0, this.lower_bound, this.upper_bound);
-  var cnt = 0;
+  //var cnt = 0;
   for (var i = 0; i < cubes.boxes.length; i++) {
     var box = cubes.boxes[i];
     if (box.length === 0) continue;
@@ -444,7 +440,7 @@ Model.prototype.calculate_connectivity = function () {
         if (j > atom_id && atoms[atom_id].is_bonded_to(atoms[j])) {
           atoms[atom_id].bonds.push(j);
           atoms[j].bonds.push(atom_id);
-          cnt++;
+          //cnt++;
         }
       }
     }
@@ -453,13 +449,15 @@ Model.prototype.calculate_connectivity = function () {
   this.cubes = cubes;
 };
 
-Model.prototype.get_nearest_atom = function (x, y, z) {
+Model.prototype.get_nearest_atom = function (x, y, z, atom_name) {
   var box_id = this.cubes.find_box_id(x, y, z);
   var indices = this.cubes.get_nearby_atoms(box_id);
   var nearest = null;
   var min_d2 = Infinity;
   for (var i = 0; i < indices.length; i++) {
     var atom = this.atoms[indices[i]];
+    if (atom_name !== undefined && atom_name !== null &&
+        atom_name !== atom.name) continue;
     var dx = atom.xyz[0] - x;
     var dy = atom.xyz[1] - y;
     var dz = atom.xyz[2] - z;
@@ -1775,9 +1773,8 @@ function Viewer(element_id) {
   this.scene.add(this.light);
   this.controls = new Controls(this.camera, this.target);
 
-  if (typeof document === 'undefined') { // for testing on node
-    return;
-  }
+  if (typeof document === 'undefined') return;  // for testing on node
+
   this.renderer = new THREE.WebGLRenderer({antialias: true});
   this.renderer.setClearColor(this.config.colors.bg, 1);
   this.renderer.setPixelRatio(window.devicePixelRatio);
@@ -1822,7 +1819,8 @@ function Viewer(element_id) {
 }
 
 Viewer.prototype.hud = function (text) {
-  var el = document.getElementById('hud');
+  if (typeof document === 'undefined') return;  // for testing on node
+  var el = document && document.getElementById('hud');
   if (el) {
     if (this.initial_hud_text === null) {
       this.initial_hud_text = el.textContent;
@@ -1972,6 +1970,18 @@ Viewer.prototype.change_isolevel_by = function (map_idx, delta) {
   this.add_el_objects(map_bag);
 };
 
+Viewer.prototype.change_map_radius = function (delta) {
+  var RMIN = 2;
+  var RMAX = 40;
+  var cf = this.config;
+  cf.map_radius = Math.min(Math.max(cf.map_radius + delta, RMIN), RMAX);
+  var info = 'map "radius": ' + cf.map_radius;
+  if (cf.map_radius === RMAX) info += ' (max)';
+  else if (cf.map_radius === RMIN) info += ' (min)';
+  this.hud(info);
+  this.redraw_maps(true); //TODO: move slow part into update()
+};
+
 Viewer.prototype.toggle_cell_box = function () {
   if (this.decor.cell_box) {
     this.scene.remove(this.decor.cell_box);
@@ -2005,9 +2015,24 @@ Viewer.prototype.shift_clip = function (away) {
            ' ' + eye.z.toFixed(2) + ']');
 };
 
+Viewer.prototype.go_to_nearest_Ca = function () {
+  var t = this.target;
+  if (this.pickable_model === null) return;
+  var a = this.pickable_model.model.get_nearest_atom(t.x, t.y, t.z, 'CA');
+  if (a) {
+    this.hud(a.long_label());
+    //this.set_selection(a);
+    this.controls.go_to(new THREE.Vector3(a.xyz[0], a.xyz[1], a.xyz[2]),
+                        null, null, 30 / auto_speed);
+    this.selected_atom = a;
+  } else {
+    this.hud('no nearby CA');
+  }
+};
+
 Viewer.prototype.redraw_all = function () {
   this.scene.fog.color = this.config.colors.bg;
-  this.renderer.setClearColor(this.config.colors.bg, 1);
+  if (this.renderer) this.renderer.setClearColor(this.config.colors.bg, 1);
   this.redraw_models();
   this.redraw_maps(true);
 };
@@ -2046,6 +2071,12 @@ Viewer.prototype.keydown = function (evt) {  // eslint-disable-line complexity
     case 189:  // dash
       this.change_isolevel_by(evt.shiftKey ? 1 : 0, -0.1);
       break;
+    case 219:  // [
+      this.change_map_radius(-2);
+      break;
+    case 221:  // ]
+      this.change_map_radius(2);
+      break;
     case 68:  // d
     case 70:  // f
       this.controls.change_slab_width(key === 68 ? -0.1 : +0.1);
@@ -2057,6 +2088,9 @@ Viewer.prototype.keydown = function (evt) {  // eslint-disable-line complexity
       this.camera.zoom *= (key === 77 ? 1.03 : (1 / 1.03));
       this.update_camera();
       this.hud('zoom: ' + this.camera.zoom.toFixed(2));
+      break;
+    case 80:  // p
+      this.go_to_nearest_Ca();
       break;
     case 51:  // 3
     case 99:  // numpad 3
@@ -2290,6 +2324,13 @@ Viewer.prototype.set_model = function (model) {
   this.recenter(null, 1);
 };
 
+Viewer.prototype.add_map = function (map, is_diff_map) {
+  //map.show_debug_info();
+  var map_bag = new MapBag(map, is_diff_map);
+  this.map_bags.push(map_bag);
+  this.add_el_objects(map_bag);
+};
+
 Viewer.prototype.load_pdb = function (url) {
   var req = new XMLHttpRequest();
   req.open('GET', url, true);
@@ -2325,12 +2366,7 @@ Viewer.prototype.load_map = function (url, is_diff_map, filetype) {
         } else {
           throw Error('Unknown map filetype.');
         }
-        //map.show_debug_info();
-        var map_bag = new MapBag(map, is_diff_map);
-        self.map_bags.push(map_bag);
-        //self.add_el_objects(map_bag);
-        //self.update_camera();
-        self.redraw_maps();
+        self.add_map(map, is_diff_map);
       } else {
         console.log('Error fetching ' + url);
       }
