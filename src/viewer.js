@@ -7,7 +7,6 @@ var isosurface = isosurface || require('./isosurface'); // eslint-disable-line
 var Viewer = (function () {
 'use strict';
 
-
 var ColorSchemes = { // accessible as Viewer.ColorSchemes
   dark: {
     bg: 0x000000,
@@ -1161,17 +1160,15 @@ Viewer.prototype.add_map = function (map, is_diff_map) {
   this.add_el_objects(map_bag);
 };
 
-Viewer.prototype.load_pdb = function (url) {
+Viewer.prototype.load_file = function (url, response_type, callback) {
   var req = new XMLHttpRequest();
+  if (response_type) req.responseType = response_type;
   req.open('GET', url, true);
-  var self = this;
   req.onreadystatechange = function () {
     if (req.readyState === 4) {
       // chrome --allow-file-access-from-files gives status 0
-      if (req.status === 200 || req.status === 0) {
-        var model = new Model();
-        model.from_pdb(req.responseText);
-        self.set_model(model);
+      if (req.status === 200 || (req.status === 0 && req.response !== null)) {
+        callback(req);
       } else {
         console.log('Error fetching ' + url);
       }
@@ -1180,29 +1177,40 @@ Viewer.prototype.load_pdb = function (url) {
   req.send(null);
 };
 
-Viewer.prototype.load_map = function (url, is_diff_map, filetype) {
-  var req = new XMLHttpRequest();
-  req.responseType = 'arraybuffer';
-  req.open('GET', url, true);
+// Load molecular model from PDB file and centers the view
+Viewer.prototype.load_pdb = function (url, callback) {
   var self = this;
-  req.onreadystatechange = function () {
-    if (req.readyState === 4) {
-      if (req.status === 200 || req.status === 0) {
-        var map = new ElMap();
-        if (filetype === 'ccp4') {
-          map.from_ccp4(req.response);
-        } else if (filetype === 'dsn6') {
-          map.from_dsn6(req.response);
-        } else {
-          throw Error('Unknown map filetype.');
-        }
-        self.add_map(map, is_diff_map);
+  this.load_file(url, null, function (req) {
+    var model = new Model();
+    model.from_pdb(req.responseText);
+    self.set_model(model);
+    if (callback) callback();
+  });
+};
+
+Viewer.prototype.load_map = function (url, is_diff_map, filetype, callback) {
+  var self = this;
+  this.load_file(url, 'arraybuffer', function (req) {
+      var map = new ElMap();
+      if (filetype === 'ccp4') {
+        map.from_ccp4(req.response);
+      } else if (filetype === 'dsn6') {
+        map.from_dsn6(req.response);
       } else {
-        console.log('Error fetching ' + url);
+        throw Error('Unknown map filetype.');
       }
-    }
-  };
-  req.send(null);
+      self.add_map(map, is_diff_map);
+      if (callback) callback();
+  });
+};
+
+// Load a normal map and a difference map.
+// To show the first map ASAP we do not download both maps in parallel.
+Viewer.prototype.load_ccp4_maps = function (url1, url2, callback) {
+  var self = this;
+  this.load_map(url1, false, 'ccp4', function () {
+    self.load_map(url2, true, 'ccp4', callback);
+  });
 };
 
 // TODO: navigation window like in gimp and mifit
