@@ -7,7 +7,7 @@ body {
 @media screen and (min-width: 660px) {
 body {
  margin: 2em 0;
- background: #000;
+ background: #000 url("el-density-maps.png") top center no-repeat;
 }}
 
 .container {
