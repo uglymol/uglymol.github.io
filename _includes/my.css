@@ -7,7 +7,7 @@ body {
 @media screen and (min-width: 660px) {
 body {
  margin: 2em 0;
- background: #000 url("el-density-maps.png") top center no-repeat;
+ background: #000 url("el-density-maps.png") top center repeat-y;
 }}
 
 .container {
@@ -30,3 +30,4 @@ a:hover, a:focus { text-decoration: underline; }
 .container a { padding: 0 1px; }
 
 #footer { text-align: center; font-size: 80%; }
+#footer a { background: #000; }
