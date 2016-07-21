@@ -2,7 +2,6 @@
 var THREE = THREE || require('three'); // eslint-disable-line
 var ElMap = ElMap || require('./elmap'); // eslint-disable-line
 var Model = Model || require('./model'); // eslint-disable-line
-var isosurface = isosurface || require('./isosurface'); // eslint-disable-line
 
 var Viewer = (function () {
 'use strict';
@@ -310,6 +309,7 @@ var CUBE_EDGES = [[0, 0, 0], [1, 0, 0],
 
 var COLOR_AIMS = ['element', 'B-factor', 'occupancy', 'index', 'chain'];
 var RENDER_STYLES = ['lines', 'trace', 'ribbon', 'lines+balls'];
+var MAP_STYLES = ['marching cubes', 'snapped MC'];
 
 function make_center_cube(size, ctr, color) {
   var geometry = new THREE.Geometry();
@@ -579,8 +579,9 @@ function Viewer(element_id) {
     bond_line: 4.0, // for 700px height (in Coot it also depends on height)
     map_line: 1.25,  // for any height
     map_radius: 10.0,
-    render_style: 'lines',
-    color_aim: 'element',
+    map_style: MAP_STYLES[0],
+    render_style: RENDER_STYLES[0],
+    color_aim: COLOR_AIMS[0],
     colors: set_colors('dark', {}),
     hydrogens: false,
     line_width: 0 // it will be set in resize()
@@ -594,6 +595,7 @@ function Viewer(element_id) {
 
   this.last_ctr = new THREE.Vector3(Infinity, 0, 0);
   this.initial_hud_text = null;
+  this.initial_hud_bg = '';
   this.selected_atom = null;
   this.active_model_bag = null;
   this.scene = new THREE.Scene();
@@ -617,6 +619,10 @@ function Viewer(element_id) {
     return;
   }
   container.appendChild(this.renderer.domElement);
+  if (window.Stats) {
+    this.stats = new window.Stats();
+    container.appendChild(this.stats.dom);
+  }
 
   window.addEventListener('resize', this.resize.bind(this));
   window.addEventListener('keydown', this.keydown.bind(this));
@@ -650,14 +656,18 @@ function Viewer(element_id) {
   };
 }
 
-Viewer.prototype.hud = function (text) {
+Viewer.prototype.hud = function (text, type) {
   if (typeof document === 'undefined') return;  // for testing on node
   var el = document && document.getElementById('hud');
   if (el) {
     if (this.initial_hud_text === null) {
       this.initial_hud_text = el.textContent;
+      this.initial_hud_bg = el.style['background-color'];
     }
     el.textContent = (text !== undefined ? text : this.initial_hud_text);
+    el.style['background-color'] = (type !== 'ERR' ? this.initial_hud_bg
+                                                   : '#b00');
+    if (type === 'ERR') console.log('ERR: ' + text);
   } else {
     console.log('hud: ' + text);
   }
@@ -686,9 +696,7 @@ Viewer.prototype.redraw_maps = function (force) {
   for (var i = 0; i < this.map_bags.length; i++) {
     var map_bag = this.map_bags[i];
     if (force || this.target.distanceToSquared(map_bag.block_ctr) > 0.01) {
-      this.clear_el_objects(map_bag);
-      map_bag.map.block = null;
-      this.add_el_objects(map_bag);
+      this.redraw_map(map_bag);
     }
   }
 };
@@ -696,6 +704,7 @@ Viewer.prototype.redraw_maps = function (force) {
 Viewer.prototype.clear_el_objects = function (map_bag) {
   for (var i = 0; i < map_bag.el_objects.length; i++) {
     this.scene.remove(map_bag.el_objects[i]);
+    map_bag.el_objects[i].geometry.dispose();
   }
   map_bag.el_objects = [];
 };
@@ -734,23 +743,26 @@ Viewer.prototype.set_atomic_objects = function (model_bag) {
   }
 };
 
-Viewer.prototype.toggle_map_visibility = function (map_bag, visible) {
-  map_bag.visible = visible;
-  if (visible) {
+Viewer.prototype.toggle_map_visibility = function (map_bag) {
+  if (typeof map_bag === 'number') {
+    map_bag = this.map_bags[map_bag];
+  }
+  map_bag.visible = !map_bag.visible;
+  this.redraw_map(map_bag);
+};
+
+Viewer.prototype.redraw_map = function (map_bag) {
+  this.clear_el_objects(map_bag);
+  if (map_bag.visible) {
     map_bag.map.block = null;
     this.add_el_objects(map_bag);
-  } else {
-    this.clear_el_objects(map_bag);
   }
 };
 
-Viewer.prototype.toggle_model_visibility = function (model_bag, visible) {
-  model_bag.visible = visible;
-  if (visible) {
-    this.set_atomic_objects(model_bag);
-  } else {
-    this.clear_atomic_objects(model_bag);
-  }
+Viewer.prototype.toggle_model_visibility = function (model_bag) {
+  model_bag = model_bag || this.active_model_bag;
+  model_bag.visible = !model_bag.visible;
+  this.redraw_model(model_bag);
 };
 
 Viewer.prototype.redraw_model = function (model_bag) {
@@ -776,17 +788,39 @@ Viewer.prototype.add_el_objects = function (map_bag) {
   for (var i = 0; i < map_bag.types.length; i++) {
     var mtype = map_bag.types[i];
     var isolevel = (mtype === 'map_neg' ? -1 : 1) * map_bag.isolevel;
-    var abs_level = map_bag.map.abs_level(isolevel);
-    var bl = map_bag.map.block;
-    var geometry = isosurface(bl.points, bl.values, bl.size, abs_level);
+    var iso = map_bag.map.isomesh_in_block(isolevel, this.config.map_style);
+    var geom = new THREE.BufferGeometry();
+    geom.addAttribute('position',
+                 new THREE.BufferAttribute(new Float32Array(iso.vertices), 3));
+    /* old version - mesh instead of lines
+    geom.setIndex(new THREE.BufferAttribute(new Uint32Array(iso.faces), 1));
     var material = new THREE.MeshBasicMaterial({
       color: this.config.colors[mtype],
       wireframe: true,
       wireframeLinewidth: this.config.map_line
     });
-    var mesh = new THREE.Mesh(geometry, material);
-    map_bag.el_objects.push(mesh);
-    this.scene.add(mesh);
+    var obj = new THREE.Mesh(geom, material);
+    */
+
+    var faces = iso.faces;
+    var arr = new Uint32Array(faces.length * 2);
+    for (var j = 0; j < faces.length; j += 3) {
+      arr[2*j] = faces[j];
+      arr[2*j+1] = faces[j+1];
+      arr[2*j+2] = faces[j+1];
+      arr[2*j+3] = faces[j+2];
+      arr[2*j+4] = faces[j+2];
+      arr[2*j+5] = faces[j];
+    }
+    geom.setIndex(new THREE.BufferAttribute(arr, 1));
+    var material = new THREE.LineBasicMaterial({
+      color: this.config.colors[mtype],
+      linewidth: this.config.map_line
+    });
+    var obj = new THREE.LineSegments(geom, material);
+
+    map_bag.el_objects.push(obj);
+    this.scene.add(obj);
   }
 };
 
@@ -892,6 +926,11 @@ Viewer.prototype.keydown = function (evt) {  // eslint-disable-line complexity
         this.hud('coloring by ' + this.config.color_aim);
         this.redraw_models();
       }
+      break;
+    case 87:  // w
+      this.config.map_style = next(this.config.map_style, MAP_STYLES);
+      this.hud('map style: ' + this.config.map_style);
+      this.redraw_maps(true);
       break;
     case 107:  // add
     case 61:  // equals/firefox
@@ -1088,9 +1127,27 @@ Viewer.prototype.resize = function (/*evt*/) {
   }
 };
 
+function parse_fragment() {
+  var ret = {};
+  if (typeof window === 'undefined') return ret;
+  var params = window.location.hash.substr(1).split('&');
+  for (var i = 0; i < params.length; i++) {
+    var kv = params[i].split('=');
+    var val = kv[1];
+    if (kv[0] === 'xyz') {
+      val = val.split(',').map(Number);
+    }
+    ret[kv[0]] = val;
+  }
+  return ret;
+}
+
 // If xyz set recenter on it looking toward the model center.
 // Otherwise recenter on the model center looking along the z axis.
 Viewer.prototype.recenter = function (xyz, steps) {
+  if (xyz == null) {
+    xyz = parse_fragment().xyz;
+  }
   if (this.active_model_bag === null) {
     if (xyz == null) return;
     this.controls.go_to(new THREE.Vector3(xyz[0], xyz[1], xyz[2]),
@@ -1164,6 +1221,9 @@ Viewer.prototype.render = function render() {
   if (true) { // TODO
     window.requestAnimationFrame(render.bind(this));
   }
+  if (this.stats) {
+    this.stats.update();
+  }
 };
 
 Viewer.prototype.set_model = function (model) {
@@ -1189,13 +1249,18 @@ Viewer.prototype.load_file = function (url, binary, callback) {
     // http://stackoverflow.com/questions/7374911/
     req.overrideMimeType('text/plain');
   }
+  var self = this;
   req.onreadystatechange = function () {
     if (req.readyState === 4) {
       // chrome --allow-file-access-from-files gives status 0
       if (req.status === 200 || (req.status === 0 && req.response !== null)) {
-        callback(req);
+        try {
+          callback(req);
+        } catch (e) {
+          self.hud('Error: ' + e.message + '\nin ' + url, 'ERR');
+        }
       } else {
-        console.log('Error fetching ' + url);
+        self.hud('Failed to fetch ' + url, 'ERR');
       }
     }
   };
@@ -1216,18 +1281,16 @@ Viewer.prototype.load_pdb = function (url, options) {
 };
 
 Viewer.prototype.load_map = function (url, is_diff_map, filetype, callback) {
+  if (filetype !== 'ccp4' && filetype !== 'dsn6') {
+    throw Error('Unknown map filetype.');
+  }
   var self = this;
   this.load_file(url, true, function (req) {
-      var map = new ElMap();
-      if (filetype === 'ccp4') {
-        map.from_ccp4(req.response);
-      } else if (filetype === 'dsn6') {
-        map.from_dsn6(req.response);
-      } else {
-        throw Error('Unknown map filetype.');
-      }
-      self.add_map(map, is_diff_map);
-      if (callback) callback();
+    var map = new ElMap();
+    if (filetype === 'ccp4') map.from_ccp4(req.response);
+    else /* === 'dsn6'*/ map.from_dsn6(req.response);
+    self.add_map(map, is_diff_map);
+    if (callback) callback();
   });
 };
 

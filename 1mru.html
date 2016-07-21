@@ -18,6 +18,7 @@
      padding: 2px 8px;
      border-radius: 5px;
      z-index: 9;
+     white-space: pre-line;
    }
    #help {
      font: 16px sans-serif;
@@ -57,8 +58,8 @@
       <header id="hud" onmousedown="event.stopPropagation();"
                        onmousemove="event.stopPropagation();"
                        ondblclick="event.stopPropagation();"
-             >This is uglymol not coot.
-                       <a href="#" onclick="V.toggle_help(); return false;"
+             >This is uglymol not coot. <a href="#"
+                         onclick="V.toggle_help(); return false;"
                          >H shows help.</a></header>
     <footer id="help">
       <b>mouse:</b>
@@ -72,7 +73,7 @@
 
       <b>keyboard:</b>
       H = toggle help
-      T = style
+      T = representation
       C = coloring
       Shift+C = bg color
       +/- = sigma level
@@ -82,6 +83,7 @@
       M/N = zoom
       U = unitcell box
       R = center view
+      W = wireframe style
       I = spin
       Shift+I = rock
       Home/End = bond width
