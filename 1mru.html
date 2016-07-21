@@ -82,6 +82,7 @@
       numpad 3/. = move clip
       M/N = zoom
       U = unitcell box
+      Y = hydrogens
       R = center view
       W = wireframe style
       I = spin
@@ -97,8 +98,9 @@
   <div id="inset"></div>
   <script>
     V = new Viewer("viewer");
-    V.load_pdb("data/1mru.pdb");
-    V.load_ccp4_maps("data/1mru.map", "data/1mru_diff.map");
+    //V.load_pdb("data/1mru.pdb");
+    V.load_pdb("data/1yk4.pdb")
+    //V.load_ccp4_maps("data/1mru.map", "data/1mru_diff.map");
     //V.show_nav("inset");
     V.render();
   </script>
