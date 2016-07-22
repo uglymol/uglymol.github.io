@@ -95,6 +95,7 @@ var Controls = function (camera, target) {
   var _panned = true;
   var _slab_width = 10.0;
   var _rock_state = 0.0;
+  var _auto_stamp = null;
   var _go_func = null;
 
   function change_slab_width(delta) {
@@ -136,16 +137,24 @@ var Controls = function (camera, target) {
     _pan_start.copy(_pan_end);
   }
 
-  this.toggle_state = function (toggled, params) {
-    _state = (_state === toggled ? STATE.NONE : toggled);
+  this.toggle_auto = function (params) {
+    _state = (_state === STATE.AUTO_ROTATE ? STATE.NONE : STATE.AUTO_ROTATE);
+    _auto_stamp = null;
     _rock_state = params.rock ? 0.0 : null;
   };
 
   this.is_going = function () { return _state === STATE.GO; };
 
+  this.is_moving = function () {
+    return _state !== STATE.NONE;
+  };
+
   function auto_rotate(eye) {
     _rotate_start.copy(eye).normalize();
-    var speed = 3e-4 * auto_speed;
+    var now = Date.now();
+    var elapsed = (_auto_stamp !== null ? now - _auto_stamp : 16.7);
+    var speed = 1.8e-5 * elapsed * auto_speed;
+    _auto_stamp = now;
     if (_rock_state !== null) {
       _rock_state += 0.02;
       speed = 4e-5 * auto_speed * Math.cos(_rock_state);
@@ -372,7 +381,7 @@ function color_by(style, atoms, elem_colors) {
       if (v > vmax) vmax = v;
       if (v < vmin) vmin = v;
     }
-    console.log('B-factors in [' + vmin + ', ' + vmax + ']');
+    //console.log('B-factors in [' + vmin + ', ' + vmax + ']');
     color_func = function (atom) {
       return rainbow_value(atom.b, vmin, vmax);
     };
@@ -638,8 +647,6 @@ function Viewer(element_id) {
   window.addEventListener('touchcancel', this.touchend.bind(this));
   window.addEventListener('dblclick', this.dblclick.bind(this));
 
-  this.controls.update();
-
   var self = this;
 
   this.mousemove = function (event) {
@@ -656,6 +663,9 @@ function Viewer(element_id) {
     document.removeEventListener('mouseup', self.mouseup);
     self.redraw_maps();
   };
+
+  this.scheduled = false;
+  this.request_render();
 }
 
 Viewer.prototype.hud = function (text, type) {
@@ -804,16 +814,11 @@ Viewer.prototype.add_el_objects = function (map_bag) {
     var obj = new THREE.Mesh(geom, material);
     */
 
-    var faces = iso.faces;
-    var arr = new Uint32Array(faces.length * 2);
-    for (var j = 0; j < faces.length; j += 3) {
-      arr[2*j] = faces[j];
-      arr[2*j+1] = faces[j+1];
-      arr[2*j+2] = faces[j+1];
-      arr[2*j+3] = faces[j+2];
-      arr[2*j+4] = faces[j+2];
-      arr[2*j+5] = faces[j];
-    }
+    // Although almost all browsers support OES_element_index_uint nowadays,
+    // use Uint32 indexes only when needed.
+    var arr = (iso.vertices.length < 3*65536 ? new Uint16Array(iso.segments)
+                                             : new Uint32Array(iso.segments));
+    //console.log('arr len:', iso.vertices.length, iso.segments.length);
     geom.setIndex(new THREE.BufferAttribute(arr, 1));
     var material = new THREE.LineBasicMaterial({
       color: this.config.colors[mtype],
@@ -995,7 +1000,7 @@ Viewer.prototype.keydown = function (evt) {  // eslint-disable-line complexity
       break;
     case 73:  // i
       this.hud('toggled camera movement');
-      this.controls.toggle_state(STATE.AUTO_ROTATE, {rock: evt.shiftKey});
+      this.controls.toggle_auto({rock: evt.shiftKey});
       break;
     case 82:  // r
       if (evt.shiftKey) {
@@ -1028,6 +1033,7 @@ Viewer.prototype.keydown = function (evt) {  // eslint-disable-line complexity
       this.hud('Nothing here. Press H for help.');
       break;
   }
+  this.request_render();
 };
 
 Viewer.prototype.mousedown = function (event) {
@@ -1052,6 +1058,7 @@ Viewer.prototype.mousedown = function (event) {
   this.controls.start(state, relX(event), relY(event));
   document.addEventListener('mousemove', this.mousemove);
   document.addEventListener('mouseup', this.mouseup);
+  this.request_render();
 };
 
 Viewer.prototype.dblclick = function (event) {
@@ -1071,6 +1078,7 @@ Viewer.prototype.dblclick = function (event) {
   } else {
     this.hud();
   }
+  this.request_render();
 };
 
 Viewer.prototype.set_selection = function (atom) {
@@ -1101,6 +1109,7 @@ Viewer.prototype.touchstart = function (event) {
     var info = touch_info(event);
     this.controls.start(STATE.PAN_ZOOM, relX(info), relY(info), info.dist);
   }
+  this.request_render();
 };
 
 Viewer.prototype.touchmove = function (event) {
@@ -1127,6 +1136,7 @@ Viewer.prototype.mousewheel = function (evt) {
   var delta = evt.wheelDelta ? evt.wheelDelta / 2000
                              : (evt.detail || 0) / -1000;
   this.change_isolevel_by(evt.shiftKey ? 1 : 0, delta);
+  this.request_render();
 };
 
 Viewer.prototype.resize = function (/*evt*/) {
@@ -1143,6 +1153,7 @@ Viewer.prototype.resize = function (/*evt*/) {
     this.config.line_width = line_width;
     this.redraw_models();
   }
+  this.request_render();
 };
 
 // makes sense only for full-window viewer
@@ -1233,7 +1244,7 @@ Viewer.prototype.update_camera = function () {
   }
 };
 
-Viewer.prototype.render = function render() {
+Viewer.prototype.render = function () {
   if (this.controls.update()) {
     this.update_camera();
   }
@@ -1244,11 +1255,19 @@ Viewer.prototype.render = function render() {
   if (this.nav) {
     this.nav.renderer.render(this.nav.scene, this.camera);
   }
-  if (true) { // TODO
-    window.requestAnimationFrame(render.bind(this));
+  this.scheduled = false;
+  if (this.controls.is_moving()) {
+    this.request_render();
   }
   if (this.stats) {
     this.stats.update();
+  }
+};
+
+Viewer.prototype.request_render = function () {
+  if (typeof window !== 'undefined' && !this.scheduled) {
+    this.scheduled = true;
+    window.requestAnimationFrame(this.render.bind(this));
   }
 };
 
@@ -1257,6 +1276,7 @@ Viewer.prototype.set_model = function (model) {
   this.model_bags.push(model_bag);
   this.set_atomic_objects(model_bag);
   this.active_model_bag = model_bag;
+  this.request_render();
 };
 
 Viewer.prototype.add_map = function (map, is_diff_map) {
@@ -1264,6 +1284,7 @@ Viewer.prototype.add_map = function (map, is_diff_map) {
   var map_bag = new MapBag(map, is_diff_map);
   this.map_bags.push(map_bag);
   this.add_el_objects(map_bag);
+  this.request_render();
 };
 
 Viewer.prototype.load_file = function (url, binary, callback) {
