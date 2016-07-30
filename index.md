@@ -18,8 +18,7 @@ For instance, when screening
 Of course, for this to work, it needs to be integrated into a website
 that provides the data access.
 
-Try it (if all lines are thin -- it's a known problem, see the first
-point [here](https://github.com/uglymol/uglymol/blob/master/TODO.md)):
+Try it:
 
 - [1MRU](1mru.html) (60kDa, 3Å),
 - [4UN4](4un4.html) (200kDa, 2.4Å),
@@ -27,14 +26,13 @@ point [here](https://github.com/uglymol/uglymol/blob/master/TODO.md)):
   (Dimple result, thaumatin, 1.4Å).
 
 Technically, UglyMol is a small
-[project](https://github.com/uglymol/uglymol) (~2 KLOC)
+[project](https://github.com/uglymol/uglymol) (~2.5 KLOC)
 forked from Nat Echols' [xtal.js](https://github.com/natechols/xtal.js/).
 See the [FAQ](https://github.com/uglymol/uglymol/wiki)
 on how to add it to your website.
 
 The [plan](https://github.com/uglymol/uglymol/blob/master/TODO.md)
 is to keep UglyMol small and ugly rather than to add many features.
-And to make it as [fast](perf.html) as possible.
 Actually this project is an experiment and further development, if any,
 will depend on received feedback. So, what should be added or changed?
 Use [Issues ](https://github.com/uglymol/uglymol/issues)
