@@ -112,10 +112,10 @@ var wide_line_vert = [
   'void main() {',
   '  vcolor = color;',
   '  mat4 mat = projectionMatrix * modelViewMatrix;',
-  '  vec2 dir1 = (mat * vec4(next - position, 0.0)).xy;',
+  '  vec2 dir1 = (mat * vec4(next - position, 0.0)).xy * size;',
   '  float len = length(dir1);',
   '  if (len > 0.0) dir1 /= len;',
-  '  vec2 dir2 = (mat * vec4(position - previous, 0.0)).xy;',
+  '  vec2 dir2 = (mat * vec4(position - previous, 0.0)).xy * size;',
   '  len = length(dir2);',
   '  dir2 = len > 0.0 ? dir2 / len : dir1;',
   '  vec2 tang = normalize(dir1 + dir2);',
@@ -124,7 +124,8 @@ var wide_line_vert = [
   // appropriate, but it'd require one more triangle and more complex shader.
   // max() is a trade-off between too-long miters and too-thin lines.
   // The outer vertex should not go too far, the inner is not a problem.
-  '  float angle_factor = max(dot(tang, dir2), side > 0.0 ? 0.5 : 0.1);',
+  '  float outer = side * dot(dir2, normal);',
+  '  float angle_factor = max(dot(tang, dir2), outer > 0.0 ? 0.5 : 0.1);',
   '  gl_Position = mat * vec4(position, 1.0);',
   '  gl_Position.xy += side * linewidth / angle_factor * normal / size;',
   '}'].join('\n');
@@ -180,13 +181,43 @@ function interpolate_colors(colors, smooth) {
   if (!smooth || smooth < 2) return colors;
   var ret = [];
   for (var i = 0; i < colors.length - 1; i++) {
-    for (var j = 0; j < smooth; ++j) {
-      // currently we don't interpolate them, just adjust length
+    for (var j = 0; j < smooth; j++) {
+      // currently we don't really interpolate colors
       ret.push(colors[i]);
     }
   }
   ret.push(colors[colors.length - 1]);
   return ret;
+}
+
+// a simplistic linear interpolation, no need to SLERP
+function interpolate_directions(dirs, smooth) {
+  smooth = smooth || 1;
+  var ret = [];
+  var i;
+  for (i = 0; i < dirs.length - 1; i++) {
+    var p = dirs[i];
+    var n = dirs[i+1];
+    for (var j = 0; j < smooth; j++) {
+      var an = j / smooth;
+      var ap = 1 - an;
+      ret.push(ap*p[0] + an*n[0], ap*p[1] + an*n[1], ap*p[2] + an*n[2]);
+    }
+  }
+  ret.push(dirs[i][0], dirs[i][1], dirs[i][2]);
+  return ret;
+}
+
+function make_uniforms(params) {
+  var uniforms = {
+    fogNear: { value: null },  // will be updated in setProgram()
+    fogFar: { value: null },
+    fogColor: { value: null }
+  };
+  for (var p in params) {
+    uniforms[p] = { value: params[p] };
+  }
+  return uniforms;
 }
 
 function LineFactory(use_gl_lines, material_param, as_segments) {
@@ -198,20 +229,12 @@ function LineFactory(use_gl_lines, material_param, as_segments) {
     delete material_param.size; // only needed for RawShaderMaterial
     this.material = new THREE.LineBasicMaterial(material_param);
   } else {
-    var uniforms = {
-      fogNear: { value: null },  // will be updated in setProgram()
-      fogFar: { value: null },
-      fogColor: { value: null }
-    };
-    for (var p in material_param) {
-      uniforms[p] = { value: material_param[p] };
-    }
     this.material = new THREE.RawShaderMaterial({
-      uniforms: uniforms,
+      uniforms: make_uniforms(material_param),
       vertexShader: as_segments ? wide_segments_vert : wide_line_vert,
-      fragmentShader: wide_line_frag
+      fragmentShader: wide_line_frag,
+      fog: true
     });
-    this.material.fog = true;
   }
 }
 
@@ -237,6 +260,17 @@ function xyz_to_buf(vectors) {
   return arr;
 }
 
+function atoms_to_buf(atoms) {
+  var arr = new Float32Array(atoms.length * 3);
+  for (var i = 0; i < atoms.length; i++) {
+    var xyz = atoms[i].xyz;
+    arr[3*i] = xyz[0];
+    arr[3*i+1] = xyz[1];
+    arr[3*i+2] = xyz[2];
+  }
+  return arr;
+}
+
 LineFactory.prototype.make_line = function (vertices, colors, smoothness) {
   var vertex_arr = interpolate_vertices(vertices, smoothness);
   var color_arr = interpolate_colors(colors, smoothness);
@@ -253,6 +287,53 @@ LineFactory.prototype.make_line = function (vertices, colors, smoothness) {
   mesh.drawMode = THREE.TriangleStripDrawMode;
   mesh.raycast = line_raycast;
   return mesh;
+};
+
+var ribbon_vert = [
+  //'attribute vec3 normal;' is added by default for ShaderMaterial
+  'uniform float shift;',
+  'varying vec3 vcolor;',
+  'void main() {',
+  '  vcolor = color;',
+  '  vec3 pos = position + shift * normalize(normal);',
+  '  gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);',
+  '}'].join('\n');
+
+var ribbon_frag = [
+  '#include <fog_pars_fragment>',
+  'varying vec3 vcolor;',
+  'void main() {',
+  '  gl_FragColor = vec4(vcolor, 1.0);',
+  '#include <fog_fragment>',
+  '}'].join('\n');
+
+// 9-line ribbon
+LineFactory.make_ribbon = function (vertices, colors, tangents, smoothness) {
+  var vertex_arr = interpolate_vertices(vertices, smoothness);
+  var color_arr = interpolate_colors(colors, smoothness);
+  var tang_arr = interpolate_directions(tangents, smoothness);
+  var obj = new THREE.Object3D();
+  var geometry = new THREE.BufferGeometry();
+  var pos = xyz_to_buf(vertex_arr);
+  geometry.addAttribute('position', new THREE.BufferAttribute(pos, 3));
+  var col = rgb_to_buf(color_arr);
+  geometry.addAttribute('color', new THREE.BufferAttribute(col, 3));
+  var tan = new Float32Array(tang_arr);
+  // it's not 'normal', but it doesn't matter
+  geometry.addAttribute('normal', new THREE.BufferAttribute(tan, 3));
+  var material0 = new THREE.ShaderMaterial({
+    uniforms: make_uniforms({shift: 0}),
+    vertexShader: ribbon_vert,
+    fragmentShader: ribbon_frag,
+    fog: true,
+    vertexColors: THREE.VertexColors
+  });
+  for (var n = -4; n < 5; n++) {
+    var material = n === 0 ? material0 : material0.clone();
+    material.uniforms.shift.value = 0.1 * n;
+    obj.add(new THREE.Line(geometry, material));
+  }
+  return obj;
 };
 
 LineFactory.prototype.make_line_segments = function (geometry) {
@@ -290,6 +371,50 @@ LineFactory.make_chickenwire = function (data, parameters) {
   var material = new THREE.LineBasicMaterial(parameters);
   return new THREE.LineSegments(geom, material);
 };
+
+var cap_vert = [
+  'uniform float linewidth;',
+  'varying vec3 vcolor;',
+  'void main() {',
+  '  vcolor = color;',
+  '  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);',
+  '  gl_PointSize = linewidth;',
+  '}'].join('\n');
+
+var cap_frag = [
+  '#include <fog_pars_fragment>',
+  'varying vec3 vcolor;',
+  'void main() {',
+  '  vec2 diff = gl_PointCoord - vec2(0.5, 0.5);',
+  '  if (dot(diff, diff) >= 0.25) discard;',
+  '  gl_FragColor = vec4(vcolor, 1.0);',
+  '#include <fog_fragment>',
+  '}'].join('\n');
+
+LineFactory.prototype.make_caps = function (atom_arr, color_arr) {
+  var positions = atoms_to_buf(atom_arr);
+  var colors = rgb_to_buf(color_arr);
+  var geometry = new THREE.BufferGeometry();
+  geometry.addAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geometry.addAttribute('color', new THREE.BufferAttribute(colors, 3));
+  var material = new THREE.ShaderMaterial({
+    uniforms: this.material.uniforms,
+    vertexShader: cap_vert,
+    fragmentShader: cap_frag,
+    fog: true,
+    vertexColors: THREE.VertexColors
+  });
+  return new THREE.Points(geometry, material);
+};
+
+LineFactory.prototype.make_balls = function (atom_arr, color_arr, ball_size) {
+  // TODO: proper ball & stick impostors
+  var obj = this.make_caps(atom_arr, color_arr);
+  obj.material.vertexShader = obj.material.vertexShader.replace('= linewidth',
+                                  '=' + ball_size.toFixed(4));
+  return obj;
+};
+
 
 // based on THREE.Line.prototype.raycast(), but skipping duplicated points
 var inverseMatrix = new THREE.Matrix4();

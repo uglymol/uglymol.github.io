@@ -320,7 +320,7 @@ var CUBE_EDGES = [[0, 0, 0], [1, 0, 0],
                   [0, 1, 1], [1, 1, 1]];
 
 var COLOR_AIMS = ['element', 'B-factor', 'occupancy', 'index', 'chain'];
-var RENDER_STYLES = ['lines', 'trace', 'ribbon', 'lines+balls'];
+var RENDER_STYLES = ['lines', 'trace', 'ribbon'/*, 'ball&stick'*/];
 var MAP_STYLES = ['marching cubes', 'snapped MC'];
 
 function make_center_cube(size, ctr, color) {
@@ -408,25 +408,6 @@ function color_by(style, atoms, elem_colors) {
   return colors;
 }
 
-function make_balls(visible_atoms, colors, ball_size) {
-  // using png is temporary and doesn't work well atm,
-  // because loading it is async
-  var ball_texture = new THREE.TextureLoader().load('src/ball.png');
-  var pt_geometry = new THREE.Geometry();
-  for (var i = 0; i < visible_atoms.length; i++) {
-    var xyz = visible_atoms[i].xyz;
-    pt_geometry.vertices.push(new THREE.Vector3(xyz[0], xyz[1], xyz[2]));
-    pt_geometry.colors.push(colors[i]);
-  }
-  var pt_material = new THREE.PointsMaterial({
-    vertexColors: THREE.VertexColors,
-    map: ball_texture,
-    size: ball_size,
-    alphaTest: 0.5
-  });
-  return new THREE.Points(pt_geometry, pt_material);
-}
-
 // Add a representation of an unbonded atom as a cross to geometry
 function add_isolated_atom(geometry, atom, color) {
   var c = atom.xyz;
@@ -503,7 +484,8 @@ ModelBag.prototype.add_bonds = function (ligands_only, ball_size) {
   var geometry = new THREE.Geometry();
   var opt = { hydrogens: this.conf.hydrogens,
               ligands_only: ligands_only,
-              balls: this.conf.render_style === 'lines+balls' };
+              balls: this.conf.render_style === 'ball&stick' };
+  var linewidth = get_line_width(this.conf);
   for (var i = 0; i < visible_atoms.length; i++) {
     var atom = visible_atoms[i];
     var color = colors[i];
@@ -522,7 +504,9 @@ ModelBag.prototype.add_bonds = function (ligands_only, ball_size) {
         var vmid = new THREE.Vector3(mid[0], mid[1], mid[2]);
         var vatom = new THREE.Vector3(atom.xyz[0], atom.xyz[1], atom.xyz[2]);
         if (opt.balls) {
-          vatom.lerp(vmid, 0.3); // TODO: use ball_size
+          var lerp_factor = vatom.distanceTo(vmid) / ball_size;
+          //color = this.conf.colors.def; // for debugging only
+          vatom.lerp(vmid, lerp_factor);
         }
         geometry.vertices.push(vatom, vmid);
         geometry.colors.push(color, color);
@@ -530,13 +514,16 @@ ModelBag.prototype.add_bonds = function (ligands_only, ball_size) {
     }
   }
   var line_factory = new LineFactory(use_gl_lines, {
-    linewidth: get_line_width(this.conf),
+    linewidth: linewidth,
     size: this.conf.window_size
   }, true);
   //console.log('make_bonds() vertex count: ' + geometry.vertices.length);
   this.atomic_objects.push(line_factory.make_line_segments(geometry));
   if (opt.balls) {
-    this.atomic_objects.push(make_balls(visible_atoms, colors, ball_size));
+    this.atomic_objects.push(line_factory.make_balls(visible_atoms, colors,
+                                                     ball_size));
+  } else if (!use_gl_lines && !ligands_only) {
+    this.atomic_objects.push(line_factory.make_caps(visible_atoms, colors));
   }
 };
 
@@ -558,9 +545,33 @@ ModelBag.prototype.add_trace = function (smoothness) {
   }
 };
 
-ModelBag.prototype.add_ribbon = function () {
-  // for now it's not really a ribbon
-  this.add_trace(8);
+ModelBag.prototype.add_ribbon = function (smoothness) {
+  var segments = this.model.extract_trace();
+  var res_map = this.model.get_residues();
+  var visible_atoms = [].concat.apply([], segments);
+  var colors = color_by(this.conf.color_aim, visible_atoms, this.conf.colors);
+  var k = 0;
+  for (var i = 0; i < segments.length; i++) {
+    var seg = segments[i];
+    var tangents = [];
+    var last = [0, 0, 0];
+    for (var j = 0; j < seg.length; j++) {
+      var residue = res_map[seg[j].resid()];
+      var tang = this.model.calculate_tangent_vector(residue);
+      // untwisting (usually applies to beta-strands)
+      if (tang[0]*last[0] + tang[1]*last[1] + tang[2]*last[2] < 0) {
+        tang[0] = -tang[0];
+        tang[1] = -tang[1];
+        tang[2] = -tang[2];
+      }
+      tangents.push(tang);
+      last = tang;
+    }
+    var color_slice = colors.slice(k, k + seg.length);
+    k += seg.length;
+    var obj = LineFactory.make_ribbon(seg, color_slice, tangents, smoothness);
+    this.atomic_objects.push(obj);
+  }
 };
 
 
@@ -668,13 +679,6 @@ Viewer.prototype.hud = function (text, type) {
   }
 };
 
-Viewer.prototype.toggle_help = function () {
-  var el = document.getElementById('help');
-  if (el) {
-    el.style.display = el.style.display === 'block' ? 'none' : 'block';
-  }
-};
-
 Viewer.prototype.redraw_center = function () {
   if (this.target.distanceToSquared(this.last_ctr) > 0.0001) {
     this.last_ctr.copy(this.target);
@@ -719,9 +723,9 @@ Viewer.prototype.set_atomic_objects = function (model_bag) {
     case 'lines':
       model_bag.add_bonds();
       break;
-    case 'lines+balls':
+    case 'ball&stick':
       var h_scale = this.camera.projectionMatrix.elements[5];
-      var ball_size = Math.max(1, 80 * h_scale);
+      var ball_size = Math.max(1, 200 * h_scale);
       model_bag.add_bonds(false, ball_size);
       break;
     case 'trace':  // + lines for ligands
@@ -729,7 +733,7 @@ Viewer.prototype.set_atomic_objects = function (model_bag) {
       model_bag.add_bonds(true);
       break;
     case 'ribbon':
-      model_bag.add_ribbon();
+      model_bag.add_ribbon(8);
       model_bag.add_bonds(true);
       break;
   }
@@ -870,6 +874,46 @@ Viewer.prototype.redraw_all = function () {
   if (this.renderer) this.renderer.setClearColor(this.config.colors.bg, 1);
   this.redraw_models();
   this.redraw_maps(true);
+};
+
+Viewer.prototype.toggle_help = function () {
+  var el = document.getElementById('help');
+  if (!el) return;
+  el.style.display = el.style.display === 'block' ? 'none' : 'block';
+  if (el.innerHTML === '') {
+    el.innerHTML = [
+      '<b>mouse:</b>',
+      'Left = rotate',
+      'Middle or Ctrl+Left = pan',
+      'Right = zoom',
+      'Ctrl+Right = clipping',
+      'Ctrl+Shift+Right = roll',
+      'Wheel = σ level',
+      'Shift+Wheel = diff map σ',
+
+      '\n<b>keyboard:</b>',
+      'H = toggle help',
+      'T = representation',
+      'C = coloring',
+      'Shift+C = bg color',
+      '+/- = sigma level',
+      ']/[ = map radius',
+      'D/F = clip width',
+      'numpad 3/. = move clip',
+      'M/N = zoom',
+      'U = unitcell box',
+      'Y = hydrogens',
+      'R = center view',
+      'W = wireframe style',
+      'I = spin',
+      'Shift+I = rock',
+      'Home/End = bond width',
+      'P = nearest Cα',
+      'Shift+P = permalink',
+      '(Shift+)space = next res.',
+
+      '\n<a href="https://uglymol.github.io">about uglymol</a>'].join('\n');
+  }
 };
 
 function next(elem, arr) {
@@ -1123,7 +1167,7 @@ Viewer.prototype.resize = function (/*evt*/) {
 };
 
 // makes sense only for full-window viewer
-function parse_fragment() {
+function parse_url_fragment() {
   var ret = {};
   if (typeof window === 'undefined') return ret;
   var params = window.location.hash.substr(1).split('&');
@@ -1288,7 +1332,7 @@ Viewer.prototype.load_pdb = function (url, options) {
     var model = new Model();
     model.from_pdb(req.responseText);
     self.set_model(model);
-    var frag = parse_fragment();
+    var frag = parse_url_fragment();
     if (frag.zoom) self.camera.zoom = frag.zoom;
     self.recenter(options.center || frag.xyz, frag.eye, 1);
     if (options.callback) options.callback();
