@@ -9,8 +9,9 @@ var Viewer = (function () {
 
 var use_gl_lines = false;
 
-var ColorSchemes = { // accessible as Viewer.ColorSchemes
-  dark: {
+var ColorSchemes = [ // accessible as Viewer.ColorSchemes
+  { // generally mimicks Coot
+    name: 'coot dark',
     bg: 0x000000,
     map_den: 0x3362B2,
     map_pos: 0x298029,
@@ -34,7 +35,43 @@ var ColorSchemes = { // accessible as Viewer.ColorSchemes
     NI: 0x00ff80,
     def: 0xa0a0a0 // default atom color
   },
-  light: { // like in Coot after Edit > Background Color > White
+  // scheme made of "solarized" colors (http://ethanschoonover.com/solarized):
+  // base03  base02  base01  base00  base0   base1   base2   base3
+  // #002b36 #073642 #586e75 #657b83 #839496 #93a1a1 #eee8d5 #fdf6e3
+  // yellow  orange  red     magenta violet  blue    cyan    green
+  // #b58900 #cb4b16 #dc322f #d33682 #6c71c4 #268bd2 #2aa198 #859900
+  {
+    name: 'solarized dark',
+    bg: 0x002b36,
+    map_den: 0x268bd2,
+    map_pos: 0x859900,
+    map_neg: 0xd33682,
+    center: 0xfdf6e3,
+    cell_box: 0xfdf6e3,
+    H: 0x586e75,
+    C: 0x93a1a1,
+    N: 0x6c71c4,
+    O: 0xcb4b16,
+    S: 0xb58900,
+    def: 0xeee8d5
+  },
+  {
+    name: 'solarized light',
+    bg: 0xfdf6e3,
+    map_den: 0x268bd2,
+    map_pos: 0x859900,
+    map_neg: 0xd33682,
+    center: 0x002b36,
+    cell_box: 0x002b36,
+    H: 0x93a1a1,
+    C: 0x586e75,
+    N: 0x6c71c4,
+    O: 0xcb4b16,
+    S: 0xb58900,
+    def: 0x073642
+  },
+  { // like in Coot after Edit > Background Color > White
+    name: 'coot light',
     bg: 0xFFFFFF,
     map_den: 0x3362B2,
     map_pos: 0x298029,
@@ -48,13 +85,9 @@ var ColorSchemes = { // accessible as Viewer.ColorSchemes
     S: 0x9E7B3D,
     def: 0x808080
   }
-};
+];
 
 var auto_speed = 1.0;  // accessible as Viewer.auto_speed
-
-// relative position on canvas in normalized device coordinates [-1, +1]
-function relX(evt) { return 2 * evt.pageX / window.innerWidth - 1; }
-function relY(evt) { return 1 - 2 * evt.pageY / window.innerHeight; }
 
 // map 2d position to sphere with radius 1.
 function project_on_ball(x, y) {
@@ -321,7 +354,7 @@ var CUBE_EDGES = [[0, 0, 0], [1, 0, 0],
 
 var COLOR_AIMS = ['element', 'B-factor', 'occupancy', 'index', 'chain'];
 var RENDER_STYLES = ['lines', 'trace', 'ribbon'/*, 'ball&stick'*/];
-var MAP_STYLES = ['marching cubes', 'snapped MC'];
+var MAP_STYLES = ['marching cubes', 'squarish'/*, 'snapped MC'*/];
 
 function make_center_cube(size, ctr, color) {
   var geometry = new THREE.Geometry();
@@ -423,17 +456,13 @@ function add_isolated_atom(geometry, atom, color) {
   }
 }
 
-function set_colors(palette, o) {
-  var scheme = ColorSchemes[palette];
+function make_colors(scheme) {
+  if (scheme.bg.set) return;
   for (var key in scheme) {
-    if (o[key]) {
-      o[key].set(scheme[key]);
-    } else {
-      o[key] = new THREE.Color(scheme[key]);
+    if (key !== 'name') {
+      scheme[key] = new THREE.Color(scheme[key]);
     }
   }
-  o.name = palette;
-  return o;
 }
 
 
@@ -583,7 +612,7 @@ function Viewer(element_id) {
     map_style: MAP_STYLES[0],
     render_style: RENDER_STYLES[0],
     color_aim: COLOR_AIMS[0],
-    colors: set_colors('dark', {}),
+    colors: ColorSchemes[0],
     hydrogens: false,
     window_size: [1, 1] // it will be set in resize()
   };
@@ -608,6 +637,8 @@ function Viewer(element_id) {
   this.scene.add(this.light);
   this.controls = new Controls(this.camera, this.target);
 
+  make_colors(this.config.colors);
+
   if (typeof document === 'undefined') return;  // for testing on node
 
   try {
@@ -617,38 +648,38 @@ function Viewer(element_id) {
     this.renderer = null;
     return;
   }
+  this.container = document.getElementById(element_id);
+  if (this.container === null) return; // can be null in headless tests
   this.renderer.setClearColor(this.config.colors.bg, 1);
   this.renderer.setPixelRatio(window.devicePixelRatio);
   this.resize();
   this.camera.zoom = this.camera.right / 35.0;
-  var container = document.getElementById(element_id);
-  if (container === null) { // for testing
-    return;
-  }
-  container.appendChild(this.renderer.domElement);
-  if (window.Stats) {
+  this.container.appendChild(this.renderer.domElement);
+  if (window.Stats) { // set by including three/examples/js/libs/stats.min.js
     this.stats = new window.Stats();
-    container.appendChild(this.stats.dom);
+    this.container.appendChild(this.stats.dom);
   }
 
+  var parent = this.container;
   window.addEventListener('resize', this.resize.bind(this));
+  // keydown could be set on a canvas or div that has tabindex > 1
   window.addEventListener('keydown', this.keydown.bind(this));
-  window.addEventListener('contextmenu', function (e) { e.preventDefault(); });
-  window.addEventListener('mousewheel', this.mousewheel.bind(this));
-  window.addEventListener('MozMousePixelScroll', this.mousewheel.bind(this));
-  window.addEventListener('mousedown', this.mousedown.bind(this));
-  window.addEventListener('touchstart', this.touchstart.bind(this));
-  window.addEventListener('touchmove', this.touchmove.bind(this));
-  window.addEventListener('touchend', this.touchend.bind(this));
-  window.addEventListener('touchcancel', this.touchend.bind(this));
-  window.addEventListener('dblclick', this.dblclick.bind(this));
+  parent.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  parent.addEventListener('mousewheel', this.mousewheel.bind(this));
+  parent.addEventListener('MozMousePixelScroll', this.mousewheel.bind(this));
+  parent.addEventListener('mousedown', this.mousedown.bind(this));
+  parent.addEventListener('touchstart', this.touchstart.bind(this));
+  parent.addEventListener('touchmove', this.touchmove.bind(this));
+  parent.addEventListener('touchend', this.touchend.bind(this));
+  parent.addEventListener('touchcancel', this.touchend.bind(this));
+  parent.addEventListener('dblclick', this.dblclick.bind(this));
 
   var self = this;
 
   this.mousemove = function (event) {
     event.preventDefault();
     //event.stopPropagation();
-    self.controls.move(relX(event), relY(event));
+    self.controls.move(self.relX(event), self.relY(event));
   };
 
   this.mouseup = function (event) {
@@ -663,6 +694,15 @@ function Viewer(element_id) {
   this.scheduled = false;
   this.request_render();
 }
+
+// relative position on canvas in normalized device coordinates [-1, +1]
+Viewer.prototype.relX = function (evt) {
+  return 2 * evt.pageX / this.config.window_size[0] - 1;
+};
+
+Viewer.prototype.relY = function (evt) {
+  return 1 - 2 * evt.pageY / this.config.window_size[1];
+};
 
 function get_line_width(config) {
   return config.bond_line * config.window_size[1] / 700;
@@ -918,6 +958,7 @@ Viewer.prototype.toggle_help = function () {
       'I = spin',
       'Shift+I = rock',
       'Home/End = bond width',
+      '\\ bond caps',
       'P = nearest Cα',
       'Shift+P = permalink',
       '(Shift+)space = next res.',
@@ -943,8 +984,8 @@ Viewer.prototype.keydown = function (evt) {  // eslint-disable-line complexity
       this.redraw_models();
       break;
     case 66:  // b
-      set_colors(next(this.config.colors.name, Object.keys(ColorSchemes)),
-                 this.config.colors);
+      this.config.colors = next(this.config.colors, ColorSchemes);
+      make_colors(this.config.colors);
       this.hud('color scheme: ' + this.config.colors.name);
       this.redraw_all();
       break;
@@ -962,7 +1003,9 @@ Viewer.prototype.keydown = function (evt) {  // eslint-disable-line complexity
       this.config.hydrogens = !this.config.hydrogens;
       this.hud((this.config.hydrogens ? 'show' : 'hide') +
                ' hydrogens (if any)');
-      //XXX
+      this.redraw_models();
+      break;
+    case 220:  // \ (backslash)
       use_gl_lines = !use_gl_lines;
       this.redraw_models();
       break;
@@ -1034,10 +1077,17 @@ Viewer.prototype.keydown = function (evt) {  // eslint-disable-line complexity
       break;
     case 36: // Home
     case 35: // End
-      this.config.bond_line += (key === 36 ? 0.2 : -0.2);
-      this.config.bond_line = Math.max(this.config.bond_line, 0.1);
-      this.redraw_models();
-      this.hud('bond width: ' + get_line_width(this.config).toFixed(1));
+      if (evt.ctrlKey) {
+        this.config.map_line += (key === 36 ? 0.1 : -0.1);
+        this.config.map_line = Math.max(this.config.map_line, 0.1);
+        this.redraw_maps(true);
+        this.hud('wireframe width: ' + this.config.map_line.toFixed(1));
+      } else {
+        this.config.bond_line += (key === 36 ? 0.2 : -0.2);
+        this.config.bond_line = Math.max(this.config.bond_line, 0.1);
+        this.redraw_models();
+        this.hud('bond width: ' + get_line_width(this.config).toFixed(1));
+      }
       break;
     case 16: // shift
     case 17: // ctrl
@@ -1073,7 +1123,7 @@ Viewer.prototype.mousedown = function (event) {
       state = STATE.ZOOM;
     }
   }
-  this.controls.start(state, relX(event), relY(event));
+  this.controls.start(state, this.relX(event), this.relY(event));
   document.addEventListener('mousemove', this.mousemove);
   document.addEventListener('mouseup', this.mouseup);
   this.request_render();
@@ -1085,7 +1135,7 @@ Viewer.prototype.dblclick = function (event) {
     this.scene.remove(this.decor.selection);
     this.decor.selection = null;
   }
-  var mouse = new THREE.Vector2(relX(event), relY(event));
+  var mouse = new THREE.Vector2(this.relX(event), this.relY(event));
   var atom;
   if (this.active_model_bag !== null) {
     atom = this.active_model_bag.pick_atom(get_raycaster(mouse, this.camera));
@@ -1122,10 +1172,12 @@ function touch_info(evt) {
 Viewer.prototype.touchstart = function (event) {
   var touches = event.touches;
   if (touches.length === 1) {
-    this.controls.start(STATE.ROTATE, relX(touches[0]), relY(touches[0]));
+    this.controls.start(STATE.ROTATE,
+                        this.relX(touches[0]), this.relY(touches[0]));
   } else { // for now using only two touches
     var info = touch_info(event);
-    this.controls.start(STATE.PAN_ZOOM, relX(info), relY(info), info.dist);
+    this.controls.start(STATE.PAN_ZOOM,
+                        this.relX(info), this.relY(info), info.dist);
   }
   this.request_render();
 };
@@ -1135,10 +1187,10 @@ Viewer.prototype.touchmove = function (event) {
   event.stopPropagation();
   var touches = event.touches;
   if (touches.length === 1) {
-    this.controls.move(relX(touches[0]), relY(touches[0]));
+    this.controls.move(this.relX(touches[0]), this.relY(touches[0]));
   } else { // for now using only two touches
     var info = touch_info(event);
-    this.controls.move(relX(info), relY(info), info.dist);
+    this.controls.move(this.relX(info), this.relY(info), info.dist);
   }
 };
 
@@ -1158,8 +1210,8 @@ Viewer.prototype.mousewheel = function (evt) {
 };
 
 Viewer.prototype.resize = function (/*evt*/) {
-  var width = window.innerWidth;
-  var height = window.innerHeight;
+  var width = this.container.clientWidth;
+  var height = this.container.clientHeight;
   this.camera.left = -width;
   this.camera.right = width;
   this.camera.top = height;
