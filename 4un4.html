@@ -71,7 +71,7 @@
   <footer id="help"></footer>
   <div id="inset"></div>
   <script>
-    V = new Viewer("viewer");
+    V = new Viewer({viewer: "viewer", hud: "hud", help: "help"});
     V.load_pdb("data/4un4_final.pdb");
     V.load_ccp4_maps("data/4un4_final_m0.map", "data/4un4_final_diff_m0.map");
   </script>
