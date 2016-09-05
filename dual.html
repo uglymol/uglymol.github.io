@@ -62,7 +62,6 @@
   <div id="viewer2"></div>
   <header id="hud">Welcome to UglyMol. Press H for help.</header>
   <footer id="help"></footer>
-  <div id="inset"></div>
   <script>
     V1 = new Viewer({viewer: "viewer1", focusable: true});
     V1.load_pdb("data/1mru.pdb");
@@ -72,6 +71,7 @@
                               "data/pdb_redo/1mru_diff.map", function () {
       V1.load_ccp4_maps("data/1mru.map", "data/1mru_diff.map");
     });
+    V1.renderer.domElement.focus();
   </script>
 </body>
 </html>
