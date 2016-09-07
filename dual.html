@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <title>Dual 1mru - UglyMol</title>
+  <title>1MRU - UglyMol</title>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, user-scalable=no">
   <meta name="theme-color" content="#333333">
@@ -25,6 +25,9 @@
      z-index: 9;
      white-space: pre-line;
    }
+   #hud u { padding: 0 8px; text-decoration: none;
+            border: solid; border-width: 1px 0; }
+   #hud s { padding: 0 8px; text-decoration: none; opacity: 0.5; }
    #help {
      display: none;
      font: 16px sans-serif;
@@ -40,26 +43,19 @@
      z-index: 9;
      white-space: pre-line;
    }
-   #inset {
-     width: 200px;
-     height: 200px;
-     background-color: #888;
-     position: absolute;
-     right: 0;
-     bottom: 0;
-     z-index: 2;
-     display: none;
-   }
    a { color: #59C; }
+   #viewer1 b, #viewer2 b { color: #fff; background-color: rgba(0,0,0,0.6); }
+   #viewer1 b { position: absolute; bottom: 30px; left: 30px; }
+   #viewer2 b { position: absolute; bottom: 30px; right: 30px; }
   </style>
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r79/three.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r80/three.min.js"></script>
   <script src="uglymol.js"></script>
 
 </head>
 <body>
-  <div id="viewer1"></div>
-  <div id="viewer2"></div>
+  <div id="viewer1"><b>PDB original</b></div>
+  <div id="viewer2"><b>PDB_REDO</b></div>
   <header id="hud">Welcome to UglyMol. Press H for help.</header>
   <footer id="help"></footer>
   <script>
