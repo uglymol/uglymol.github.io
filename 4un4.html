@@ -16,7 +16,7 @@
      height: 100%;
    }
    #hud {
-     font: 14px;
+     font-size: 15px;
      color: #ddd;
      background-color: rgba(0,0,0,0.6);
      text-align: center;
@@ -34,7 +34,7 @@
    #hud s { padding: 0 8px; text-decoration: none; opacity: 0.5; }
    #help {
      display: none;
-     font: 16px;
+     font-size: 16px;
      color: #eee;
      background-color: rgba(0,0,0,0.7);
      position: absolute;
@@ -60,7 +60,7 @@
    a { color: #59C; }
   </style>
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r80/three.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r82/three.min.js"></script>
   <script src="uglymol.js"></script>
 
 </head>
@@ -75,7 +75,7 @@
   <footer id="help"></footer>
   <div id="inset"></div>
   <script>
-    V = new Viewer({viewer: "viewer", hud: "hud", help: "help"});
+    V = new UM.Viewer({viewer: "viewer", hud: "hud", help: "help"});
     V.load_pdb("data/4un4_final.pdb");
     V.load_ccp4_maps("data/4un4_final_m0.map", "data/4un4_final_diff_m0.map");
   </script>

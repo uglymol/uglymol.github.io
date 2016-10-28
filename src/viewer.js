@@ -1,11 +1,9 @@
 
-var THREE = THREE || require('three'); // eslint-disable-line
-var LineFactory = LineFactory || require('./lines'); // eslint-disable-line
-var ElMap = ElMap || require('./elmap'); // eslint-disable-line
-var Model = Model || require('./model'); // eslint-disable-line
+import * as THREE from 'three';
+import { LineFactory } from './lines.js';
+import { ElMap } from './elmap.js';
+import { Model } from './model.js';
 
-var Viewer = (function () {
-'use strict';
 
 var use_gl_lines = false;
 
@@ -185,9 +183,7 @@ var Controls = function (camera, target) {
 
   this.is_going = function () { return _state === STATE.GO; };
 
-  this.is_moving = function () {
-    return _state !== STATE.NONE;
-  };
+  this.is_moving = function () { return _state !== STATE.NONE; };
 
   function auto_rotate(eye) {
     _rotate_start.copy(eye).normalize();
@@ -598,7 +594,7 @@ ModelBag.prototype.add_ribbon = function (smoothness) {
   }
 };
 
-function Viewer(options) {
+export function Viewer(options) {
   this.config = {
     bond_line: 4.0, // ~ to height, like in Coot (see scale_by_height())
     map_line: 1.25,  // for any height
@@ -630,8 +626,8 @@ function Viewer(options) {
     this.target = options.share_view.target;
     this.camera = options.share_view.camera;
     this.controls = options.share_view.controls;
-    this.share_view = options.share_view;
-    this.share_view.share_view = this;
+    this.tied_viewer = options.share_view;
+    this.tied_viewer.tied_viewer = this; // not GC friendly
   } else {
     this.target = new THREE.Vector3();
     this.camera = new THREE.OrthographicCamera();
@@ -886,12 +882,22 @@ Viewer.prototype.change_isolevel_by = function (map_idx, delta) {
   if (map_idx >= this.map_bags.length) return;
   var map_bag = this.map_bags[map_idx];
   map_bag.isolevel += delta;
-  var abs_level = map_bag.map.abs_level(map_bag.isolevel);
-  this.hud('map ' + (map_idx+1) + ' level =  ' + abs_level.toFixed(4) +
-           'e/A^3 (' + map_bag.isolevel.toFixed(2) + ' rmsd)');
   //TODO: move slow part into update()
   this.clear_el_objects(map_bag);
   this.add_el_objects(map_bag);
+  var abs_level = map_bag.map.abs_level(map_bag.isolevel);
+  var abs_text = abs_level.toFixed(4);
+  var tied = this.tied_viewer;
+  if (tied && map_idx < tied.map_bags.length) {
+    var tied_bag = tied.map_bags[map_idx];
+    // Should we tie by sigma or absolute level? Now it's sigma.
+    tied_bag.isolevel = map_bag.isolevel;
+    abs_text += ' / ' + tied_bag.map.abs_level(tied_bag.isolevel).toFixed(4);
+    tied.clear_el_objects(tied_bag);
+    tied.add_el_objects(tied_bag);
+  }
+  this.hud('map ' + (map_idx+1) + ' level =  ' + abs_text +
+           ' e/\u212B\u00B3 (' + map_bag.isolevel.toFixed(2) + ' rmsd)');
 };
 
 Viewer.prototype.change_map_radius = function (delta) {
@@ -1393,15 +1399,15 @@ Viewer.prototype.render = function () {
   if (this.controls.update()) {
     this.update_camera();
   }
+  var tied = this.tied_viewer;
   if (!this.controls.is_going()) {
     this.redraw_maps();
+    if (tied && !tied.scheduled) tied.redraw_maps();
   }
   this.renderer.render(this.scene, this.camera);
+  if (tied && !tied.scheduled) tied.renderer.render(tied.scene, tied.camera);
   if (this.nav) {
     this.nav.renderer.render(this.nav.scene, this.camera);
-  }
-  if (this.share_view && !this.share_view.scheduled) {
-    this.share_view.render();
   }
   this.scheduled = false;
   if (this.controls.is_moving()) {
@@ -1549,7 +1555,3 @@ Viewer.prototype.show_nav = function (inset_id) {
 Viewer.ColorSchemes = ColorSchemes;
 Viewer.auto_speed = auto_speed;
 
-return Viewer;
-})();
-
-if (typeof module !== 'undefined') module.exports = Viewer;

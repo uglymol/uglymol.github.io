@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <title>1MRU - UglyMol</title>
+  <title>1MRU x2 - UglyMol</title>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, user-scalable=no">
   <meta name="theme-color" content="#333333">
@@ -12,7 +12,7 @@
    #viewer1 { left: 0; }
    #viewer2 { right: 0; }
    #hud {
-     font: 14px;
+     font-size: 14px;
      color: #ddd;
      background-color: rgba(0,0,0,0.6);
      text-align: center;
@@ -30,7 +30,7 @@
    #hud s { padding: 0 8px; text-decoration: none; opacity: 0.5; }
    #help {
      display: none;
-     font: 16px;
+     font-size: 16px;
      color: #eee;
      background-color: rgba(0,0,0,0.7);
      position: absolute;
@@ -49,7 +49,7 @@
    #viewer2 b { position: absolute; bottom: 30px; right: 30px; }
   </style>
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r80/three.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r82/three.min.js"></script>
   <script src="uglymol.js"></script>
 
 </head>
@@ -59,9 +59,9 @@
   <header id="hud">Welcome to UglyMol. Press H for help.</header>
   <footer id="help"></footer>
   <script>
-    V1 = new Viewer({viewer: "viewer1", focusable: true});
+    V1 = new UM.Viewer({viewer: "viewer1", focusable: true});
     V1.load_pdb("data/1mru.pdb");
-    V2 = new Viewer({viewer: "viewer2", focusable: true, share_view: V1});
+    V2 = new UM.Viewer({viewer: "viewer2", focusable: true, share_view: V1});
     V2.load_pdb_and_ccp4_maps("data/pdb_redo/1mru_final.pdb",
                               "data/pdb_redo/1mru.map",
                               "data/pdb_redo/1mru_diff.map", function () {
