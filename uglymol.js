@@ -1,5 +1,5 @@
 /*!
- * UglyMol v0.5.0. Macromolecular Viewer for Crystallographers.
+ * UglyMol v0.5.1. Macromolecular Viewer for Crystallographers.
  * Copyright 2014 Nat Echols
  * Copyright 2016 Diamond Light Source Ltd
  * Copyright 2016 Marcin Wojdyr
@@ -11,7 +11,7 @@
   (factory((global.UM = global.UM || {}),global.THREE));
 }(this, (function (exports,THREE) { 'use strict';
 
-exports.VERSION = '0.5.0';
+exports.VERSION = '0.5.1';
 
 // eslint-disable-next-line max-params
 function UnitCell(a /*:number*/, b /*:number*/, c /*:number*/,
@@ -53,7 +53,7 @@ function UnitCell(a /*:number*/, b /*:number*/, c /*:number*/,
     cos_alpha_star / (s1rca2 * sin_gamma * b),
     0.0,
     0.0,
-    1.0 / (sin_beta * s1rca2 * c)
+    1.0 / (sin_beta * s1rca2 * c),
   ];
 
   function multiply(xyz, mat) {
@@ -67,13 +67,15 @@ function UnitCell(a /*:number*/, b /*:number*/, c /*:number*/,
   this.orthogonalize = function (xyz) { return multiply(xyz, orth); };
 }
 
+// @flow
+
 var AMINO_ACIDS = [
   'ALA', 'ARG', 'ASN', 'ASP', 'CYS', 'GLN', 'GLU', 'GLY', 'HIS', 'ILE', 'LEU',
-  'LYS', 'MET', 'MSE', 'PHE', 'PRO', 'SER', 'THR', 'TRP', 'TYR', 'VAL', 'UNK'
+  'LYS', 'MET', 'MSE', 'PHE', 'PRO', 'SER', 'THR', 'TRP', 'TYR', 'VAL', 'UNK',
 ];
 var NUCLEIC_ACIDS = [
   'DA', 'DC', 'DG', 'DT', 'A', 'C', 'G', 'U', 'rA', 'rC', 'rG', 'rU',
-  'Ar', 'Cr', 'Gr', 'Ur'
+  'Ar', 'Cr', 'Gr', 'Ur',
 ];
 
 var NOT_LIGANDS = ['HOH'].concat(AMINO_ACIDS, NUCLEIC_ACIDS);
@@ -381,6 +383,10 @@ Atom.prototype.long_label = function () {
          a.xyz[1].toFixed(2) + ',' + a.xyz[2].toFixed(2) + ')';
 };
 
+Atom.prototype.short_label = function () {
+  var a = this;
+  return a.name + ' /' + a.resseq + ' ' + a.resname + '/' + a.chain;
+};
 
 // Partition atoms into boxes for quick neighbor searching.
 function Cubicles(atoms, box_length, lower_bound, upper_bound) {
@@ -485,6 +491,8 @@ Model.prototype.get_nearest_atom = function (x, y, z, atom_name) {
   }
   return nearest;
 };
+
+// @flow
 
 /* eslint comma-spacing: 0, no-multi-spaces: 0 */
 
@@ -1073,7 +1081,8 @@ function marching_cubes(dims, values, points, isolevel, method) {
   var vlist = new Array(12);
   var vert_offsets = calculate_vert_offsets(dims);
   var vertex_values = new Float32Array(8);
-  var vertex_points = [null, null, null, null, null, null, null, null];
+  var p0 = [0, 0, 0]; // initial value - never used, but makes Flow happy
+  var vertex_points = [p0, p0, p0, p0, p0, p0, p0, p0];
   var size_x = dims[0];
   var size_y = dims[1];
   var size_z = dims[2];
@@ -1085,7 +1094,8 @@ function marching_cubes(dims, values, points, isolevel, method) {
       for (var z = 0; z < size_z - 1; z++) {
         var offset0 = z + size_z * (y + size_y * x);
         var cubeindex = 0;
-        var i, j;
+        var i;
+        var j;
         for (i = 0; i < 8; ++i) {
           j = offset0 + vert_offsets[i];
           cubeindex |= (values[j] < isolevel) ? 1 << i : 0;
@@ -1133,13 +1143,19 @@ function marching_cubes(dims, values, points, isolevel, method) {
   return { vertices: vertices, segments: segments };
 }
 
-function isosurface(dims, values, points, isolevel, method) {
+function isosurface(dims /*: [number, number, number]*/,
+                           values /*: number[]*/,
+                           points /*: Array<[number, number, number]>*/,
+                           isolevel /*: number*/,
+                           method /*: string*/) {
   check_input(dims, values, points);
   //if (method === 'marching tetrahedra') {
   //  return marching_tetrahedra(dims, values, points, isolevel);
   //}
   return marching_cubes(dims, values, points, isolevel, method);
 }
+
+// @flow
 
 function GridArray(dim) {
   this.dim = dim; // dimensions of the grid for the entire unit cell
@@ -1455,6 +1471,58 @@ ElMap.prototype.isomesh_in_block = function (sigma, method) {
   return isosurface(bl.size, bl.values, bl.points, abs_level, method);
 };
 
+// @flow
+
+var CUBE_EDGES = [[0, 0, 0], [1, 0, 0],
+                  [0, 0, 0], [0, 1, 0],
+                  [0, 0, 0], [0, 0, 1],
+                  [1, 0, 0], [1, 1, 0],
+                  [1, 0, 0], [1, 0, 1],
+                  [0, 1, 0], [1, 1, 0],
+                  [0, 1, 0], [0, 1, 1],
+                  [0, 0, 1], [1, 0, 1],
+                  [0, 0, 1], [0, 1, 1],
+                  [1, 0, 1], [1, 1, 1],
+                  [1, 1, 0], [1, 1, 1],
+                  [0, 1, 1], [1, 1, 1]];
+
+function makeCentralCube(size /*:number*/,
+                                ctr /*:{x:number, y:number, z:number}*/,
+                                color /*:THREE.Color*/) {
+  var geometry = new THREE.Geometry();
+  for (var i = 0; i < CUBE_EDGES.length; i++) {
+    var a = CUBE_EDGES[i];
+    var x = ctr.x + size * (a[0] - 0.5);
+    var y = ctr.y + size * (a[1] - 0.5);
+    var z = ctr.z + size * (a[2] - 0.5);
+    geometry.vertices.push(new THREE.Vector3(x, y, z));
+  }
+  var material = new THREE.LineBasicMaterial({color: color, linewidth: 2});
+  return new THREE.LineSegments(geometry, material);
+}
+
+// A cube with 3 edges (for x, y, z axes) colored in red, green and blue.
+function makeRgbBox(transform_func /*: number[] => number[]*/,
+                           color /*:THREE.Color*/) {
+  var geometry = new THREE.Geometry();
+  for (var i = 0; i < CUBE_EDGES.length; i++) {
+    var xyz = transform_func(CUBE_EDGES[i]);
+    geometry.vertices.push(new THREE.Vector3(xyz[0], xyz[1], xyz[2]));
+  }
+  geometry.colors.push(
+    new THREE.Color(0xff0000), new THREE.Color(0xffaa00),
+    new THREE.Color(0x00ff00), new THREE.Color(0xaaff00),
+    new THREE.Color(0x0000ff), new THREE.Color(0x00aaff)
+  );
+  for (var j = 6; j < CUBE_EDGES.length; j++) {
+    geometry.colors.push(color);
+  }
+  var material = new THREE.LineBasicMaterial({vertexColors:
+                                                THREE.VertexColors});
+  return new THREE.LineSegments(geometry, material);
+}
+
+
 // input arrays must be of the same length
 function wide_line_geometry(vertex_arr, color_arr) {
   var len = vertex_arr.length;
@@ -1501,7 +1569,8 @@ function wide_line_geometry(vertex_arr, color_arr) {
 function wide_segments_geometry(vertex_arr, color_arr) {
   // n input vertices => 2n output vertices, n triangles, 3n indexes
   var len = vertex_arr.length;
-  var i, j;
+  var i;
+  var j;
   var pos = [];
   for (i = 0; i < len; i++) {
     var v = vertex_arr[i];
@@ -1647,31 +1716,12 @@ function make_uniforms(params) {
   var uniforms = {
     fogNear: { value: null },  // will be updated in setProgram()
     fogFar: { value: null },
-    fogColor: { value: null }
+    fogColor: { value: null },
   };
-  for (var p in params) {
+  for (var p in params) {  // eslint-disable-line guard-for-in
     uniforms[p] = { value: params[p] };
   }
   return uniforms;
-}
-
-function LineFactory(use_gl_lines, material_param, as_segments) {
-  this.use_gl_lines = use_gl_lines;
-  if (use_gl_lines) {
-    if (material_param.color === undefined) {
-      material_param.vertexColors = THREE.VertexColors;
-    }
-    delete material_param.size; // only needed for ShaderMaterial
-    this.material = new THREE.LineBasicMaterial(material_param);
-  } else {
-    this.material = new THREE.ShaderMaterial({
-      uniforms: make_uniforms(material_param),
-      vertexShader: as_segments ? wide_segments_vert : wide_line_vert,
-      fragmentShader: wide_line_frag,
-      fog: true,
-      vertexColors: THREE.VertexColors
-    });
-  }
 }
 
 function rgb_to_buf(colors) {
@@ -1707,23 +1757,6 @@ function atoms_to_buf(atoms) {
   return arr;
 }
 
-LineFactory.prototype.make_line = function (vertices, colors, smoothness) {
-  var vertex_arr = interpolate_vertices(vertices, smoothness);
-  var color_arr = interpolate_colors(colors, smoothness);
-  if (this.use_gl_lines) {
-    var geometry = new THREE.BufferGeometry();
-    var pos = xyz_to_buf(vertex_arr);
-    geometry.addAttribute('position', new THREE.BufferAttribute(pos, 3));
-    var col = rgb_to_buf(color_arr);
-    geometry.addAttribute('color', new THREE.BufferAttribute(col, 3));
-    return new THREE.Line(geometry, this.material);
-  }
-  var mesh = new THREE.Mesh(wide_line_geometry(vertex_arr, color_arr),
-                            this.material);
-  mesh.drawMode = THREE.TriangleStripDrawMode;
-  mesh.raycast = line_raycast;
-  return mesh;
-};
 
 var ribbon_vert = [
   //'attribute vec3 normal;' is added by default for ShaderMaterial
@@ -1744,7 +1777,10 @@ var ribbon_frag = [
   '}'].join('\n');
 
 // 9-line ribbon
-LineFactory.make_ribbon = function (vertices, colors, tangents, smoothness) {
+function makeRibbon(vertices /*: Array<{xyz: [number,number,number]}>*/,
+                           colors /*: Array<THREE.Color>*/,
+                           tangents /*: Array<[number,number,number]>*/,
+                           smoothness /*: number*/) {
   var vertex_arr = interpolate_vertices(vertices, smoothness);
   var color_arr = interpolate_colors(colors, smoothness);
   var tang_arr = interpolate_directions(tangents, smoothness);
@@ -1762,7 +1798,7 @@ LineFactory.make_ribbon = function (vertices, colors, tangents, smoothness) {
     vertexShader: ribbon_vert,
     fragmentShader: ribbon_frag,
     fog: true,
-    vertexColors: THREE.VertexColors
+    vertexColors: THREE.VertexColors,
   });
   for (var n = -4; n < 5; n++) {
     var material = n === 0 ? material0 : material0.clone();
@@ -1770,21 +1806,11 @@ LineFactory.make_ribbon = function (vertices, colors, tangents, smoothness) {
     obj.add(new THREE.Line(geometry, material));
   }
   return obj;
-};
+}
 
-LineFactory.prototype.make_line_segments = function (geometry) {
-  if (this.use_gl_lines) {
-    return new THREE.LineSegments(geometry, this.material);
-  }
-  var vertex_arr = geometry.vertices;
-  var color_arr = geometry.colors;
-  var mesh = new THREE.Mesh(wide_segments_geometry(vertex_arr, color_arr),
-                            this.material);
-  mesh.raycast = line_raycast;
-  return mesh;
-};
 
-LineFactory.make_chickenwire = function (data, parameters) {
+function makeChickenWire(data /*: {vertices: number[], segments: number[]}*/,
+                         parameters /*: {[key: string]: any}*/) {
   var geom = new THREE.BufferGeometry();
   var position = new Float32Array(data.vertices);
   geom.addAttribute('position', new THREE.BufferAttribute(position, 3));
@@ -1806,6 +1832,106 @@ LineFactory.make_chickenwire = function (data, parameters) {
   geom.setIndex(new THREE.BufferAttribute(arr, 1));
   var material = new THREE.LineBasicMaterial(parameters);
   return new THREE.LineSegments(geom, material);
+}
+
+
+var grid_vert = [
+  'uniform vec3 ucolor;',
+  'uniform vec3 fogColor;',
+  'varying vec4 vcolor;',
+  'void main() {',
+  '  vec2 scale = vec2(projectionMatrix[0][0], projectionMatrix[1][1]);',
+  '  float z = position.z;',
+  '  float fogFactor = (z > 0.5 ? 0.2 : 0.7);',
+  '  float alpha = 0.8 * smoothstep(z > 1.5 ? -10.0 : 0.01, 0.1, scale.y);',
+  '  vcolor = vec4(mix(ucolor, fogColor, fogFactor), alpha);',
+  '  gl_Position = vec4(position.xy * scale, -0.99, 1.0);',
+  '}'].join('\n');
+
+var grid_frag = [
+  'varying vec4 vcolor;',
+  'void main() {',
+  '  gl_FragColor = vcolor;',
+  '}'].join('\n');
+
+function makeGrid() {
+  var N = 50;
+  var pos = [];
+  for (var i = -N; i <= N; i++) {
+    var z = 0; // z only marks major/minor axes
+    if (i % 5 === 0) z = i % 2 === 0 ? 2 : 1;
+    pos.push(-N, i, z, N, i, z);  // horizontal line
+    pos.push(i, -N, z, i, N, z);  // vertical line
+  }
+  var geom = new THREE.BufferGeometry();
+  geom.addAttribute('position',
+                    new THREE.BufferAttribute(new Float32Array(pos), 3));
+  var material = new THREE.ShaderMaterial({
+    uniforms: make_uniforms({ucolor: new THREE.Color(0x888888)}),
+    //linewidth: 3,
+    vertexShader: grid_vert,
+    fragmentShader: grid_frag,
+    fog: true, // no really, but we use fogColor
+  });
+  material.transparent = true;
+  var obj = new THREE.LineSegments(geom, material);
+  obj.frustumCulled = false;  // otherwise the renderer could skip it
+  obj.color_value = material.uniforms.ucolor.value; // shortcut
+  return obj;
+}
+
+
+function LineFactory(options /*: {[key: string]: mixed}*/) {
+  var mparams = {};
+  mparams.linewidth = options.linewidth;
+  this.use_gl_lines = options.gl_lines;
+  if (this.use_gl_lines) {
+    if (options.color === undefined) {
+      mparams.vertexColors = THREE.VertexColors;
+    } else {
+      mparams.color = options.color;
+    }
+    this.material = new THREE.LineBasicMaterial(mparams);
+  } else {
+    mparams.size = options.size;
+    this.material = new THREE.ShaderMaterial({
+      uniforms: make_uniforms(mparams),
+      vertexShader: options.as_segments ? wide_segments_vert : wide_line_vert,
+      fragmentShader: wide_line_frag,
+      fog: true,
+      vertexColors: THREE.VertexColors,
+    });
+  }
+}
+
+LineFactory.prototype.make_line = function (vertices, colors, smoothness) {
+  var vertex_arr = interpolate_vertices(vertices, smoothness);
+  var color_arr = interpolate_colors(colors, smoothness);
+  if (this.use_gl_lines) {
+    var geometry = new THREE.BufferGeometry();
+    var pos = xyz_to_buf(vertex_arr);
+    geometry.addAttribute('position', new THREE.BufferAttribute(pos, 3));
+    var col = rgb_to_buf(color_arr);
+    geometry.addAttribute('color', new THREE.BufferAttribute(col, 3));
+    return new THREE.Line(geometry, this.material);
+  }
+  var mesh = new THREE.Mesh(wide_line_geometry(vertex_arr, color_arr),
+                            this.material);
+  mesh.drawMode = THREE.TriangleStripDrawMode;
+  mesh.raycast = line_raycast;
+  return mesh;
+};
+
+LineFactory.prototype.make_line_segments = function (geometry) {
+  if (this.use_gl_lines) {
+    return new THREE.LineSegments(geometry, this.material);
+  }
+  var vertex_arr = geometry.vertices;
+  var color_arr = geometry.colors;
+  var mesh = new THREE.Mesh(wide_segments_geometry(vertex_arr, color_arr),
+                            this.material);
+  mesh.raycast = line_raycast;
+  return mesh;
 };
 
 var cap_vert = [
@@ -1817,6 +1943,7 @@ var cap_vert = [
   '  gl_PointSize = linewidth;',
   '}'].join('\n');
 
+// not sure how portable it is
 var cap_frag = [
   '#include <fog_pars_fragment>',
   'varying vec3 vcolor;',
@@ -1838,7 +1965,7 @@ LineFactory.prototype.make_caps = function (atom_arr, color_arr) {
     vertexShader: cap_vert,
     fragmentShader: cap_frag,
     fog: true,
-    vertexColors: THREE.VertexColors
+    vertexColors: THREE.VertexColors,
   });
   return new THREE.Points(geometry, material);
 };
@@ -1855,6 +1982,8 @@ LineFactory.prototype.make_balls = function (atom_arr, color_arr, ball_size) {
 // based on THREE.Line.prototype.raycast(), but skipping duplicated points
 var inverseMatrix = new THREE.Matrix4();
 var ray = new THREE.Ray();
+// this function will be put on prototype
+/* eslint-disable no-invalid-this */
 function line_raycast(raycaster, intersects) {
   var precisionSq = raycaster.linePrecision * raycaster.linePrecision;
   inverseMatrix.getInverse(this.matrixWorld);
@@ -1878,12 +2007,84 @@ function line_raycast(raycaster, intersects) {
       distance: distance,
       point: interSegment.clone().applyMatrix4(this.matrixWorld),
       index: i,
-      object: this
+      object: this,
     });
   }
 }
 
-var use_gl_lines = false;
+function makeCanvasWithText(text, options) {
+  if (typeof document === 'undefined') return;  // for testing on node
+  var canvas = document.createElement('canvas');
+  // Canvas size should be 2^N.
+  canvas.width = 256;  // arbitrary limit, to keep it simple
+  canvas.height = 16;  // font size
+  var context = canvas.getContext('2d');
+  if (!context) return null;
+  context.font = (options.font || 'bold 14px') + ' sans-serif';
+  //context.fillStyle = 'green';
+  //context.fillRect(0, 0, canvas.width, canvas.height);
+  context.textBaseline = 'bottom';
+  if (options.color) context.fillStyle = options.color;
+  context.fillText(text, 0, canvas.height);
+  return canvas;
+}
+
+var label_vert = [
+  'uniform vec2 canvas_size;',
+  'uniform vec2 win_size;',
+  'varying vec2 vUv;',
+  'void main() {',
+  '  vUv = uv;',
+  '  vec2 rel_offset = vec2(0.02, -0.3);',
+  '  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);',
+  '  gl_Position.xy += (uv + rel_offset) * 2.0 * canvas_size / win_size;',
+  '  gl_Position.z += 1.0 * projectionMatrix[2][2];',
+  '}'].join('\n');
+
+var label_frag = [
+  '#include <fog_pars_fragment>',
+  'varying vec2 vUv;',
+  'uniform sampler2D map;',
+  'void main() {',
+  '  gl_FragColor = texture2D(map, vUv);',
+  '#include <fog_fragment>',
+  '}'].join('\n');
+
+
+function makeLabel(text /*:string*/, options /*:{[key:string]: any}*/) {
+  var canvas = makeCanvasWithText(text, options);
+  if (!canvas) return;
+  var texture = new THREE.Texture(canvas);
+  texture.needsUpdate = true;
+
+  // Rectangle geometry.
+  var geometry = new THREE.BufferGeometry();
+  var pos = options.pos;
+  var position = new Float32Array([].concat(pos, pos, pos, pos));
+  var uvs = new Float32Array([0, 1, 1, 1, 0, 0, 1, 0]);
+  var indices = new Uint16Array([0, 2, 1, 2, 3, 1]);
+  geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+  geometry.addAttribute('position', new THREE.BufferAttribute(position, 3));
+  geometry.addAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+
+  var material = new THREE.ShaderMaterial({
+    uniforms: make_uniforms({map: texture,
+                             canvas_size: [canvas.width, canvas.height],
+                             win_size: options.win_size}),
+    vertexShader: label_vert,
+    fragmentShader: label_frag,
+    fog: true,
+  });
+  material.transparent = true;
+  var mesh = new THREE.Mesh(geometry, material);
+  mesh.remake = function (text, options) {
+    texture.image = makeCanvasWithText(text, options);
+    texture.needsUpdate = true;
+  };
+  return mesh;
+}
+
+// @flow
 
 var ColorSchemes = [ // accessible as Viewer.ColorSchemes
   { // generally mimicks Coot
@@ -1909,7 +2110,7 @@ var ColorSchemes = [ // accessible as Viewer.ColorSchemes
     MN: 0xff90c0,
     FE: 0xa03000,
     NI: 0x00ff80,
-    def: 0xa0a0a0 // default atom color
+    def: 0xa0a0a0, // default atom color
   },
   // scheme made of "solarized" colors (http://ethanschoonover.com/solarized):
   // base03  base02  base01  base00  base0   base1   base2   base3
@@ -1929,7 +2130,7 @@ var ColorSchemes = [ // accessible as Viewer.ColorSchemes
     N: 0x6c71c4,
     O: 0xcb4b16,
     S: 0xb58900,
-    def: 0xeee8d5
+    def: 0xeee8d5,
   },
   {
     name: 'solarized light',
@@ -1944,7 +2145,7 @@ var ColorSchemes = [ // accessible as Viewer.ColorSchemes
     N: 0x6c71c4,
     O: 0xcb4b16,
     S: 0xb58900,
-    def: 0x073642
+    def: 0x073642,
   },
   { // like in Coot after Edit > Background Color > White
     name: 'coot light',
@@ -1959,8 +2160,8 @@ var ColorSchemes = [ // accessible as Viewer.ColorSchemes
     N: 0x1C51B3,
     O: 0xC33869,
     S: 0x9E7B3D,
-    def: 0x808080
-  }
+    def: 0x808080,
+  },
 ];
 
 var auto_speed = 1.0;  // accessible as Viewer.auto_speed
@@ -1988,7 +2189,7 @@ function get_raycaster(coords, camera) {
   if (_raycaster === undefined) _raycaster = new THREE.Raycaster();
   _raycaster.setFromCamera(coords, camera);
   _raycaster.near = camera.near;
-  _raycaster.far = camera.far - 0.2 * (camera.far - camera.near); // 20% in fog
+  _raycaster.far = camera.far - 0.1 * (camera.far - camera.near); // 10% in fog
   _raycaster.linePrecision = 0.2;
   return _raycaster;
 }
@@ -2102,7 +2303,7 @@ var Controls = function (camera, target) {
       changed = true;
     }
     camera.position.addVectors(target, eye);
-    if (_state === STATE.GO) {
+    if (_state === STATE.GO && _go_func) {
       _go_func();
       changed = true;
     }
@@ -2139,8 +2340,8 @@ var Controls = function (camera, target) {
     switch (_state) {
       case STATE.ROTATE:
         var xyz = project_on_ball(x, y);
-        //console.log(this.camera.projectionMatrix);
-        //console.log(this.camera.matrixWorld);
+        //console.log(camera.projectionMatrix);
+        //console.log(camera.matrixWorld);
         // TODO maybe use project()/unproject()/applyProjection()
         var eye = camera.position.clone().sub(target);
         _rotate_end.crossVectors(camera.up, eye).setLength(xyz[0]);
@@ -2172,7 +2373,7 @@ var Controls = function (camera, target) {
     _pinch_start = _pinch_end;
     _pan_start.copy(_pan_end);
     if (atom !== null) { // center on atom
-      this.go_to(new THREE.Vector3(atom.xyz[0], atom.xyz[1], atom.xyz[2]));
+      this.go_to(atom.xyz);
     }
   };
 
@@ -2180,6 +2381,9 @@ var Controls = function (camera, target) {
   this.change_slab_width = change_slab_width;
 
   this.go_to = function (targ, cam_pos, cam_up, steps) {
+    if (targ instanceof Array) {
+      targ = new THREE.Vector3(targ[0], targ[1], targ[2]);
+    }
     if ((!targ || targ.distanceToSquared(target) < 0.1) &&
         (!cam_pos || cam_pos.distanceToSquared(camera.position) < 0.1) &&
         (!cam_up || cam_up.distanceToSquared(camera.up) < 0.1)) {
@@ -2217,57 +2421,11 @@ var Controls = function (camera, target) {
 
 // constants
 
-var CUBE_EDGES = [[0, 0, 0], [1, 0, 0],
-                  [0, 0, 0], [0, 1, 0],
-                  [0, 0, 0], [0, 0, 1],
-                  [1, 0, 0], [1, 1, 0],
-                  [1, 0, 0], [1, 0, 1],
-                  [0, 1, 0], [1, 1, 0],
-                  [0, 1, 0], [0, 1, 1],
-                  [0, 0, 1], [1, 0, 1],
-                  [0, 0, 1], [0, 1, 1],
-                  [1, 0, 1], [1, 1, 1],
-                  [1, 1, 0], [1, 1, 1],
-                  [0, 1, 1], [1, 1, 1]];
-
 var COLOR_AIMS = ['element', 'B-factor', 'occupancy', 'index', 'chain'];
 var RENDER_STYLES = ['lines', 'trace', 'ribbon'/*, 'ball&stick'*/];
 var MAP_STYLES = ['marching cubes', 'squarish'/*, 'snapped MC'*/];
-
-function make_center_cube(size, ctr, color) {
-  var geometry = new THREE.Geometry();
-  for (var i = 0; i < CUBE_EDGES.length; i++) {
-    var a = CUBE_EDGES[i];
-    var x = ctr.x + size * (a[0] - 0.5);
-    var y = ctr.y + size * (a[1] - 0.5);
-    var z = ctr.z + size * (a[2] - 0.5);
-    geometry.vertices.push(new THREE.Vector3(x, y, z));
-  }
-  var material = new THREE.LineBasicMaterial({color: color, linewidth: 2});
-  return new THREE.LineSegments(geometry, material);
-}
-
-function make_unitcell_box(uc, color) {
-  if (!uc) {
-    throw Error('Unit cell not defined!');
-  }
-  var geometry = new THREE.Geometry();
-  for (var i = 0; i < CUBE_EDGES.length; i++) {
-    var xyz = uc.orthogonalize(CUBE_EDGES[i]);
-    geometry.vertices.push(new THREE.Vector3(xyz[0], xyz[1], xyz[2]));
-  }
-  geometry.colors.push(
-    new THREE.Color(0xff0000), new THREE.Color(0xffaa00),
-    new THREE.Color(0x00ff00), new THREE.Color(0xaaff00),
-    new THREE.Color(0x0000ff), new THREE.Color(0x00aaff)
-  );
-  for (var j = 6; j < CUBE_EDGES.length; j++) {
-    geometry.colors.push(color);
-  }
-  var material = new THREE.LineBasicMaterial({vertexColors:
-                                                THREE.VertexColors});
-  return new THREE.LineSegments(geometry, material);
-}
+var LINE_STYLES = ['normal', 'simplistic'];
+var LABEL_FONTS = ['bold 14px', '14px', '16px', 'bold 16px'];
 
 function rainbow_value(v, vmin, vmax) {
   var c = new THREE.Color(0xe0e0e0);
@@ -2411,16 +2569,18 @@ ModelBag.prototype.add_bonds = function (ligands_only, ball_size) {
       }
     }
   }
-  var line_factory = new LineFactory(use_gl_lines, {
+  var line_factory = new LineFactory({
+    gl_lines: this.conf.line_style === 'simplistic',
     linewidth: scale_by_height(this.conf.bond_line, this.win_size),
-    size: this.win_size
-  }, true);
+    size: this.win_size,
+    as_segments: true,
+  });
   //console.log('make_bonds() vertex count: ' + geometry.vertices.length);
   this.atomic_objects.push(line_factory.make_line_segments(geometry));
   if (opt.balls) {
     this.atomic_objects.push(line_factory.make_balls(visible_atoms, colors,
                                                      ball_size));
-  } else if (!use_gl_lines && !ligands_only) {
+  } else if (!line_factory.use_gl_lines && !ligands_only) {
     this.atomic_objects.push(line_factory.make_caps(visible_atoms, colors));
   }
 };
@@ -2429,9 +2589,10 @@ ModelBag.prototype.add_trace = function (smoothness) {
   var segments = this.model.extract_trace();
   var visible_atoms = [].concat.apply([], segments);
   var colors = color_by(this.conf.color_aim, visible_atoms, this.conf.colors);
-  var line_factory = new LineFactory(use_gl_lines, {
+  var line_factory = new LineFactory({
+    gl_lines: this.conf.line_style === 'simplistic',
     linewidth: scale_by_height(this.conf.bond_line, this.win_size),
-    size: this.win_size
+    size: this.win_size,
   });
   var k = 0;
   for (var i = 0; i < segments.length; i++) {
@@ -2467,12 +2628,19 @@ ModelBag.prototype.add_ribbon = function (smoothness) {
     }
     var color_slice = colors.slice(k, k + seg.length);
     k += seg.length;
-    var obj = LineFactory.make_ribbon(seg, color_slice, tangents, smoothness);
+    var obj = makeRibbon(seg, color_slice, tangents, smoothness);
     this.atomic_objects.push(obj);
   }
 };
 
-function Viewer(options) {
+function Viewer(options /*: {[key: string]: any}*/) {
+  // rendered objects
+  this.model_bags = [];
+  this.map_bags = [];
+  this.decor = {cell_box: null, selection: null, zoom_grid: makeGrid() };
+  this.labels = {};
+  this.nav = null;
+
   this.config = {
     bond_line: 4.0, // ~ to height, like in Coot (see scale_by_height())
     map_line: 1.25,  // for any height
@@ -2480,18 +2648,14 @@ function Viewer(options) {
     map_style: MAP_STYLES[0],
     render_style: RENDER_STYLES[0],
     color_aim: COLOR_AIMS[0],
+    line_style: LINE_STYLES[0],
+    label_font: LABEL_FONTS[0],
     colors: ColorSchemes[0],
-    hydrogens: false
+    hydrogens: false,
   };
   this.set_colors();
   this.window_size = [1, 1]; // it will be set in resize()
   this.window_offset = [0, 0];
-
-  // rendered objects
-  this.model_bags = [];
-  this.map_bags = [];
-  this.decor = {cell_box: null, selection: null};
-  this.nav = null;
 
   this.last_ctr = new THREE.Vector3(Infinity, 0, 0);
   this.selected_atom = null;
@@ -2511,7 +2675,6 @@ function Viewer(options) {
     this.camera = new THREE.OrthographicCamera();
     this.controls = new Controls(this.camera, this.target);
   }
-
   if (typeof document === 'undefined') return;  // for testing on node
 
   try {
@@ -2543,6 +2706,8 @@ function Viewer(options) {
   if (options.focusable) {
     this.renderer.domElement.tabIndex = 0;
   }
+  this.decor.zoom_grid.visible = false;
+  this.scene.add(this.decor.zoom_grid);
   if (window.Stats) { // set by including three/examples/js/libs/stats.min.js
     this.stats = new window.Stats();
     this.container.appendChild(this.stats.dom);
@@ -2573,6 +2738,7 @@ function Viewer(options) {
   this.mouseup = function (event) {
     event.preventDefault();
     event.stopPropagation();
+    self.decor.zoom_grid.visible = false;
     self.controls.stop(self.active_model_bag);
     document.removeEventListener('mousemove', self.mousemove);
     document.removeEventListener('mouseup', self.mouseup);
@@ -2604,6 +2770,7 @@ Viewer.prototype.set_colors = function (scheme) {
       }
     }
   }
+  this.decor.zoom_grid.color_value.set(scheme.cell_box);
   this.redraw_all();
 };
 
@@ -2643,7 +2810,7 @@ Viewer.prototype.redraw_center = function () {
     if (this.mark) {
       this.scene.remove(this.mark);
     }
-    this.mark = make_center_cube(0.1, this.target, this.config.colors.center);
+    this.mark = makeCentralCube(0.1, this.target, this.config.colors.center);
     this.scene.add(this.mark);
   }
 };
@@ -2658,10 +2825,23 @@ Viewer.prototype.redraw_maps = function (force) {
   }
 };
 
+Viewer.prototype.remove_and_dispose = function (obj, only_dispose) {
+  if (!only_dispose) this.scene.remove(obj);
+  if (obj.geometry) obj.geometry.dispose();
+  if (obj.material) {
+    if (obj.material.uniforms && obj.material.uniforms.map) {
+      obj.material.uniforms.map.value.dispose();
+    }
+    obj.material.dispose();
+  }
+  for (var i = 0; i < obj.children.length; i++) {
+    this.remove_and_dispose(obj.children[i]);
+  }
+};
+
 Viewer.prototype.clear_el_objects = function (map_bag) {
   for (var i = 0; i < map_bag.el_objects.length; i++) {
-    this.scene.remove(map_bag.el_objects[i]);
-    map_bag.el_objects[i].geometry.dispose();
+    this.remove_and_dispose(map_bag.el_objects[i]);
   }
   map_bag.el_objects = [];
 };
@@ -2669,7 +2849,7 @@ Viewer.prototype.clear_el_objects = function (map_bag) {
 Viewer.prototype.clear_atomic_objects = function (model) {
   if (model.atomic_objects) {
     for (var i = 0; i < model.atomic_objects.length; i++) {
-      this.scene.remove(model.atomic_objects[i]);
+      this.remove_and_dispose(model.atomic_objects[i]);
     }
   }
   model.atomic_objects = null;
@@ -2700,12 +2880,49 @@ Viewer.prototype.set_atomic_objects = function (model_bag) {
   }
 };
 
+// Add/remove label if `show` is specified, toggle otherwise.
+Viewer.prototype.toggle_label = function (atom, show) {
+  if (!atom) return;
+  var text = atom.short_label();
+  var uid = text; // we assume that the labels are unique - often true
+  var is_shown = (uid in this.labels);
+  if (show === undefined) show = !is_shown;
+  if (show) {
+    if (is_shown) return;
+    var label = makeLabel(text, {
+      pos: atom.xyz,
+      font: this.config.label_font,
+      color: '#' + this.config.colors.cell_box.getHexString(),
+      win_size: this.window_size,
+    });
+    if (!label) return;
+    this.labels[uid] = label;
+    this.scene.add(label);
+  } else {
+    if (!is_shown) return;
+    this.remove_and_dispose(this.labels[uid]);
+    delete this.labels[uid];
+  }
+};
+
+Viewer.prototype.redraw_labels = function () {
+  for (var uid in this.labels) { // eslint-disable-line guard-for-in
+    var text = uid;
+    this.labels[uid].remake(text, {
+      font: this.config.label_font,
+      color: '#' + this.config.colors.cell_box.getHexString(),
+    });
+  }
+};
+
+
 Viewer.prototype.toggle_map_visibility = function (map_bag) {
   if (typeof map_bag === 'number') {
     map_bag = this.map_bags[map_bag];
   }
   map_bag.visible = !map_bag.visible;
   this.redraw_map(map_bag);
+  this.request_render();
 };
 
 Viewer.prototype.redraw_map = function (map_bag) {
@@ -2720,6 +2937,7 @@ Viewer.prototype.toggle_model_visibility = function (model_bag) {
   model_bag = model_bag || this.active_model_bag;
   model_bag.visible = !model_bag.visible;
   this.redraw_model(model_bag);
+  this.request_render();
 };
 
 Viewer.prototype.redraw_model = function (model_bag) {
@@ -2736,7 +2954,7 @@ Viewer.prototype.redraw_models = function () {
 };
 
 Viewer.prototype.add_el_objects = function (map_bag) {
-  if (!map_bag.visible) return;
+  if (!map_bag.visible || this.config.map_radius <= 0) return;
   if (!map_bag.map.block) {
     map_bag.block_ctr.copy(this.target);
     map_bag.map.extract_block(this.config.map_radius,
@@ -2747,9 +2965,9 @@ Viewer.prototype.add_el_objects = function (map_bag) {
     var isolevel = (mtype === 'map_neg' ? -1 : 1) * map_bag.isolevel;
     var iso = map_bag.map.isomesh_in_block(isolevel, this.config.map_style);
 
-    var obj = LineFactory.make_chickenwire(iso, {
+    var obj = makeChickenWire(iso, {
       color: this.config.colors[mtype],
-      linewidth: this.config.map_line
+      linewidth: this.config.map_line,
     });
     map_bag.el_objects.push(obj);
     this.scene.add(obj);
@@ -2779,15 +2997,14 @@ Viewer.prototype.change_isolevel_by = function (map_idx, delta) {
 };
 
 Viewer.prototype.change_map_radius = function (delta) {
-  var RMIN = 2;
   var RMAX = 40;
   var cf = this.config;
-  cf.map_radius = Math.min(Math.max(cf.map_radius + delta, RMIN), RMAX);
+  cf.map_radius = Math.min(Math.max(cf.map_radius + delta, 0), RMAX);
   var info = 'map "radius": ' + cf.map_radius;
   if (cf.map_radius === RMAX) info += ' (max)';
-  else if (cf.map_radius === RMIN) info += ' (min)';
+  else if (cf.map_radius === 0) info += ' (hidden maps)';
   this.hud(info);
-  this.redraw_maps(true); //TODO: move slow part into update()
+  this.redraw_maps(true);
 };
 
 Viewer.prototype.change_slab_width_by = function (delta) {
@@ -2796,12 +3013,20 @@ Viewer.prototype.change_slab_width_by = function (delta) {
   this.hud('clip width: ' + (this.camera.far-this.camera.near).toFixed(1));
 };
 
+Viewer.prototype.change_zoom_by_factor = function (mult) {
+  this.camera.zoom *= mult;
+  this.update_camera();
+  this.hud('zoom: ' + this.camera.zoom.toFixed(2));
+};
+
 Viewer.prototype.toggle_full_screen = function () {
   var d = document;
   if (d.fullscreenElement || d.mozFullScreenElement ||
       d.webkitFullscreenElement || d.msFullscreenElement) {
     var ex = d.exitFullscreen || d.webkitExitFullscreen ||
+    // flow-ignore-line property `msExitFullscreen` not found in document
              d.mozCancelFullScreen || d.msExitFullscreen;
+    // flow-ignore-line cannot call property `exitFullscreen` of unknown type
     if (ex) ex.call(d);
   } else {
     var el = this.container;
@@ -2825,7 +3050,8 @@ Viewer.prototype.toggle_cell_box = function () {
       uc = this.map_bags[0].map.unit_cell;
     }
     if (uc) {
-      this.decor.cell_box = make_unitcell_box(uc, this.config.colors.cell_box);
+      this.decor.cell_box = makeRgbBox(uc.orthogonalize,
+                                       this.config.colors.cell_box);
       this.scene.add(this.decor.cell_box);
     }
   }
@@ -2848,11 +3074,7 @@ Viewer.prototype.go_to_nearest_Ca = function () {
   if (this.active_model_bag === null) return;
   var a = this.active_model_bag.model.get_nearest_atom(t.x, t.y, t.z, 'CA');
   if (a) {
-    this.hud(a.long_label());
-    //this.set_selection(a);
-    this.controls.go_to(new THREE.Vector3(a.xyz[0], a.xyz[1], a.xyz[2]),
-                        null, null, 30 / auto_speed);
-    this.selected_atom = a;
+    this.select_atom(a);
   } else {
     this.hud('no nearby CA');
   }
@@ -2864,6 +3086,7 @@ Viewer.prototype.redraw_all = function () {
   if (this.renderer) this.renderer.setClearColor(this.config.colors.bg, 1);
   this.redraw_models();
   this.redraw_maps(true);
+  this.redraw_labels();
 };
 
 Viewer.toggle_help = function (el) {
@@ -2885,6 +3108,7 @@ Viewer.toggle_help = function (el) {
       'T = representation',
       'C = coloring',
       'B = bg color',
+      'Q = label font',
       '+/- = sigma level',
       ']/[ = map radius',
       'D/F = clip width',
@@ -2952,8 +3176,7 @@ Viewer.prototype.keydown = function (evt) {  // eslint-disable-line complexity
       this.redraw_models();
       break;
     case 220:  // \ (backslash)
-      use_gl_lines = !use_gl_lines;
-      this.hud((use_gl_lines ? 'simple' : 'round-capped') + ' bonds');
+      this.select_next('bond lines', 'line_style', LINE_STYLES, evt.shiftKey);
       this.redraw_models();
       break;
     case 107:  // add
@@ -2983,10 +3206,10 @@ Viewer.prototype.keydown = function (evt) {  // eslint-disable-line complexity
       }
       break;
     case 77:  // m
+      this.change_zoom_by_factor(evt.shiftKey ? 1.2 : 1.03);
+      break;
     case 78:  // n
-      this.camera.zoom *= (key === 77 ? 1.03 : (1 / 1.03));
-      this.update_camera();
-      this.hud('zoom: ' + this.camera.zoom.toFixed(2));
+      this.change_zoom_by_factor(1 / (evt.shiftKey ? 1.2 : 1.03));
       break;
     case 80:  // p
       if (evt.shiftKey) {
@@ -3013,6 +3236,10 @@ Viewer.prototype.keydown = function (evt) {  // eslint-disable-line complexity
     case 73:  // i
       this.hud('toggled camera movement');
       this.controls.toggle_auto({rock: evt.shiftKey});
+      break;
+    case 81:  // q
+      this.select_next('label font', 'label_font', LABEL_FONTS, evt.shiftKey);
+      this.redraw_labels();
       break;
     case 82:  // r
       if (evt.shiftKey) {
@@ -3072,6 +3299,7 @@ Viewer.prototype.mousedown = function (event) {
     if (event.ctrlKey) {
       state = event.shiftKey ? STATE.ROLL : STATE.SLAB;
     } else {
+      this.decor.zoom_grid.visible = true;
       state = STATE.ZOOM;
     }
   }
@@ -3094,14 +3322,15 @@ Viewer.prototype.dblclick = function (event) {
   }
   if (atom) {
     this.hud(atom.long_label());
-    this.set_selection(atom);
+    this.toggle_label(atom);
+    this.set_mark(atom);
   } else {
     this.hud();
   }
   this.request_render();
 };
 
-Viewer.prototype.set_selection = function (atom) {
+Viewer.prototype.set_mark = function (atom) {
   var geometry = new THREE.Geometry();
   geometry.vertices.push(new THREE.Vector3(atom.xyz[0], atom.xyz[1],
                                            atom.xyz[2]));
@@ -3204,14 +3433,12 @@ function parse_url_fragment() {
 Viewer.prototype.recenter = function (xyz, eye, steps) {
   var new_up = null;
   var ctr;
-  if (xyz == null || eye == null) {
-    ctr = this.active_model_bag.model.get_center();
-  }
   if (eye) {
     eye = new THREE.Vector3(eye[0], eye[1], eye[2]);
   }
   if (xyz == null) { // center on the molecule
     if (this.active_model_bag === null) return;
+    ctr = this.active_model_bag.model.get_center();
     xyz = new THREE.Vector3(ctr[0], ctr[1], ctr[2]);
     if (!eye) {
       eye = xyz.clone();
@@ -3222,6 +3449,7 @@ Viewer.prototype.recenter = function (xyz, eye, steps) {
     xyz = new THREE.Vector3(xyz[0], xyz[1], xyz[2]);
     if (eye == null && this.active_model_bag !== null) {
       // look toward the center of the molecule
+      ctr = this.active_model_bag.model.get_center();
       eye = new THREE.Vector3(ctr[0], ctr[1], ctr[2]);
       eye.sub(xyz).negate().setLength(100); // we store now (eye - xyz)
       new_up = new THREE.Vector3(0, 1, 0).projectOnPlane(eye);
@@ -3240,12 +3468,15 @@ Viewer.prototype.recenter = function (xyz, eye, steps) {
 Viewer.prototype.center_next_residue = function (back) {
   if (!this.active_model_bag) return;
   var a = this.active_model_bag.model.next_residue(this.selected_atom, back);
-  if (a) {
-    this.hud('-> ' + a.long_label());
-    this.controls.go_to(new THREE.Vector3(a.xyz[0], a.xyz[1], a.xyz[2]),
-                        null, null, 30 / auto_speed);
-    this.selected_atom = a;
-  }
+  if (a) this.select_atom(a);
+};
+
+Viewer.prototype.select_atom = function (atom) {
+  this.hud('-> ' + atom.long_label());
+  this.controls.go_to(atom.xyz, null, null, 30 / auto_speed);
+  this.toggle_label(this.selected_atom);
+  this.selected_atom = atom;
+  this.toggle_label(atom);
 };
 
 Viewer.prototype.update_camera = function () {
@@ -3271,6 +3502,9 @@ Viewer.prototype.update_camera = function () {
   */
 };
 
+// The main loop. Running when a mouse button is pressed or when the view
+// is moving (and run once more after the mouse button is released).
+// It is also triggered by keydown events.
 Viewer.prototype.render = function () {
   this.scheduled = true;
   if (this.renderer === null) return;
@@ -3346,10 +3580,11 @@ Viewer.prototype.load_file = function (url, binary, callback, show_progress) {
   };
   if (show_progress) {
     req.addEventListener('progress', function (evt) {
-      if (evt.lengthComputable) {
+      if (evt.lengthComputable && evt.loaded && evt.total) {
         var fn = url.split('/').pop();
-        self.hud('loading ' + fn + ' ... ' + (evt.loaded >> 10) + ' / ' +
-                 (evt.total >> 10) + ' kB');
+        self.hud('loading ' + fn + ' ... ' +
+                 // flow-ignore-line  Property `loaded` not found in Event
+                 (evt.loaded >> 10) + ' / ' + (evt.total >> 10) + ' kB');
       }
     });
   }
@@ -3383,7 +3618,7 @@ Viewer.prototype.load_map = function (url, is_diff_map, filetype, callback,
   var self = this;
   this.load_file(url, true, function (req) {
     var map = new ElMap();
-    if (filetype === 'ccp4') map.from_ccp4(req.response);
+    if (filetype === 'ccp4') map.from_ccp4(req.response, true);
     else /* === 'dsn6'*/ map.from_dsn6(req.response);
     self.add_map(map, is_diff_map);
     if (callback) callback();
@@ -3437,9 +3672,16 @@ exports.UnitCell = UnitCell;
 exports.Model = Model;
 exports.isosurface = isosurface;
 exports.ElMap = ElMap;
+exports.makeCentralCube = makeCentralCube;
+exports.makeRgbBox = makeRgbBox;
+exports.makeRibbon = makeRibbon;
+exports.makeChickenWire = makeChickenWire;
+exports.makeGrid = makeGrid;
 exports.LineFactory = LineFactory;
+exports.makeLabel = makeLabel;
 exports.Viewer = Viewer;
 
 Object.defineProperty(exports, '__esModule', { value: true });
 
 })));
+//# sourceMappingURL=uglymol.js.map

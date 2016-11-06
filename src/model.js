@@ -1,13 +1,14 @@
+// @flow
 
 import { UnitCell } from './unitcell.js';
 
 var AMINO_ACIDS = [
   'ALA', 'ARG', 'ASN', 'ASP', 'CYS', 'GLN', 'GLU', 'GLY', 'HIS', 'ILE', 'LEU',
-  'LYS', 'MET', 'MSE', 'PHE', 'PRO', 'SER', 'THR', 'TRP', 'TYR', 'VAL', 'UNK'
+  'LYS', 'MET', 'MSE', 'PHE', 'PRO', 'SER', 'THR', 'TRP', 'TYR', 'VAL', 'UNK',
 ];
 var NUCLEIC_ACIDS = [
   'DA', 'DC', 'DG', 'DT', 'A', 'C', 'G', 'U', 'rA', 'rC', 'rG', 'rU',
-  'Ar', 'Cr', 'Gr', 'Ur'
+  'Ar', 'Cr', 'Gr', 'Ur',
 ];
 
 var NOT_LIGANDS = ['HOH'].concat(AMINO_ACIDS, NUCLEIC_ACIDS);
@@ -315,6 +316,10 @@ Atom.prototype.long_label = function () {
          a.xyz[1].toFixed(2) + ',' + a.xyz[2].toFixed(2) + ')';
 };
 
+Atom.prototype.short_label = function () {
+  var a = this;
+  return a.name + ' /' + a.resseq + ' ' + a.resname + '/' + a.chain;
+};
 
 // Partition atoms into boxes for quick neighbor searching.
 function Cubicles(atoms, box_length, lower_bound, upper_bound) {
