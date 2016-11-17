@@ -1,21 +1,22 @@
 // @flow
 
 import * as THREE from 'three';
-import { LineFactory, makeRibbon, makeChickenWire, makeGrid, makeWheels,
-         makeCentralCube, makeRgbBox, makeLabel } from './lines.js';
+import { makeLineMaterial, makeLineSegments, makeLine, makeRibbon,
+         makeChickenWire, makeGrid, makeWheels, makeCube,
+         makeRgbBox, makeLabel, addXyzCross } from './lines.js';
 import { ElMap } from './elmap.js';
 import { Model } from './model.js';
 
 
-var ColorSchemes = [ // accessible as Viewer.ColorSchemes
+var ColorSchemes = [ // Viewer.prototype.ColorSchemes
   { // generally mimicks Coot
     name: 'coot dark',
     bg: 0x000000,
+    fg: 0xFFFFFF,
     map_den: 0x3362B2,
     map_pos: 0x298029,
     map_neg: 0x8B2E2E,
     center: 0xC997B0,
-    cell_box: 0xFFFFFF,
     // atoms
     H: 0x858585, // H is normally invisible
     // C, N and O are taken approximately (by color-picker) from coot
@@ -41,11 +42,11 @@ var ColorSchemes = [ // accessible as Viewer.ColorSchemes
   {
     name: 'solarized dark',
     bg: 0x002b36,
+    fg: 0xfdf6e3,
     map_den: 0x268bd2,
     map_pos: 0x859900,
     map_neg: 0xd33682,
     center: 0xfdf6e3,
-    cell_box: 0xfdf6e3,
     H: 0x586e75,
     C: 0x93a1a1,
     N: 0x6c71c4,
@@ -56,11 +57,11 @@ var ColorSchemes = [ // accessible as Viewer.ColorSchemes
   {
     name: 'solarized light',
     bg: 0xfdf6e3,
+    fg: 0x002b36,
     map_den: 0x268bd2,
     map_pos: 0x859900,
     map_neg: 0xd33682,
     center: 0x002b36,
-    cell_box: 0x002b36,
     H: 0x93a1a1,
     C: 0x586e75,
     N: 0x6c71c4,
@@ -71,11 +72,11 @@ var ColorSchemes = [ // accessible as Viewer.ColorSchemes
   { // like in Coot after Edit > Background Color > White
     name: 'coot light',
     bg: 0xFFFFFF,
+    fg: 0x000000,
     map_den: 0x3362B2,
     map_pos: 0x298029,
     map_neg: 0x8B2E2E,
     center: 0xC7C769,
-    cell_box: 0x000000,
     H: 0x999999,
     C: 0xA96464,
     N: 0x1C51B3,
@@ -121,14 +122,12 @@ var Controls = function (camera, target) {
   var _pan_start = new THREE.Vector2();
   var _pan_end = new THREE.Vector2();
   var _panned = true;
-  var _slab_width = 10.0;
   var _rotating = null;
   var _auto_stamp = null;
   var _go_func = null;
 
-  function change_slab_width(delta) {
-    _slab_width = Math.max(_slab_width + delta, 0.01);
-  }
+  // the far plane is more distant from the target than the near plane (3:1)
+  this.slab_width = [2.5, 7.5];
 
   function rotate_camera(eye) {
     var quat = new THREE.Quaternion();
@@ -145,12 +144,12 @@ var Controls = function (camera, target) {
     if (_state === STATE.ZOOM) {
       camera.zoom /= (1 - dx + dy);
     } else if (_state === STATE.SLAB) {
-      change_slab_width(10.0 * dx);
       target.addScaledVector(eye, -5.0 / eye.length() * dy);
     } else if (_state === STATE.ROLL) {
       camera.up.applyAxisAngle(eye, 0.05 * (dx - dy));
     }
     _zoom_start.copy(_zoom_end);
+    return _state === STATE.SLAB ? 10*dx : null;
   }
 
   function pan_camera(eye) {
@@ -211,7 +210,11 @@ var Controls = function (camera, target) {
       changed = true;
     }
     if (!_zoom_end.equals(_zoom_start)) {
-      zoom_camera(eye);
+      var dslab = zoom_camera(eye);
+      if (dslab) {
+        this.slab_width[0] = Math.max(this.slab_width[0] + dslab, 0.01);
+        this.slab_width[1] = Math.max(this.slab_width[1] + dslab, 0.01);
+      }
       changed = true;
     }
     if (!_pan_end.equals(_pan_start)) {
@@ -289,9 +292,6 @@ var Controls = function (camera, target) {
     _pan_start.copy(_pan_end);
     return ret;
   };
-
-  this.slab_width = function () { return _slab_width; };
-  this.change_slab_width = change_slab_width;
 
   this.go_to = function (targ, cam_pos, cam_up, steps) {
     if (targ instanceof Array) {
@@ -390,22 +390,6 @@ function color_by(style, atoms, elem_colors) {
   return colors;
 }
 
-// Add a representation of an unbonded atom as a cross to geometry
-function add_isolated_atom(geometry, atom, color) {
-  var c = atom.xyz;
-  var R = 0.7;
-  geometry.vertices.push(new THREE.Vector3(c[0]-R, c[1], c[2]));
-  geometry.vertices.push(new THREE.Vector3(c[0]+R, c[1], c[2]));
-  geometry.vertices.push(new THREE.Vector3(c[0], c[1]-R, c[2]));
-  geometry.vertices.push(new THREE.Vector3(c[0], c[1]+R, c[2]));
-  geometry.vertices.push(new THREE.Vector3(c[0], c[1], c[2]-R));
-  geometry.vertices.push(new THREE.Vector3(c[0], c[1], c[2]+R));
-  for (var i = 0; i < 6; i++) {
-    geometry.colors.push(color);
-  }
-}
-
-
 function MapBag(map, is_diff_map) {
   this.map = map;
   this.name = '';
@@ -444,7 +428,8 @@ ModelBag.prototype.add_bonds = function (ligands_only, ball_size) {
   var visible_atoms = this.get_visible_atoms();
   var color_style = ligands_only ? 'element' : this.conf.color_aim;
   var colors = color_by(color_style, visible_atoms, this.conf.colors);
-  var geometry = new THREE.Geometry();
+  var vertex_arr /*:THREE.Vector3[]*/ = [];
+  var color_arr = [];
   var opt = { hydrogens: this.conf.hydrogens,
               ligands_only: ligands_only,
               balls: this.conf.render_style === 'ball&stick' };
@@ -453,7 +438,10 @@ ModelBag.prototype.add_bonds = function (ligands_only, ball_size) {
     var color = colors[i];
     if (ligands_only && !atom.is_ligand) continue;
     if (atom.bonds.length === 0 && !opt.balls) { // nonbonded, draw star
-      add_isolated_atom(geometry, atom, color);
+      addXyzCross(vertex_arr, atom.xyz, 0.7);
+      for (var n = 0; n < 6; n++) {
+        color_arr.push(color);
+      }
     } else { // bonded, draw lines
       for (var j = 0; j < atom.bonds.length; j++) {
         var other = this.model.atoms[atom.bonds[j]];
@@ -466,24 +454,23 @@ ModelBag.prototype.add_bonds = function (ligands_only, ball_size) {
         var vatom = new THREE.Vector3(atom.xyz[0], atom.xyz[1], atom.xyz[2]);
         if (opt.balls) {
           var lerp_factor = vatom.distanceTo(vmid) / ball_size;
-          //color = this.conf.colors.def; // for debugging only
           vatom.lerp(vmid, lerp_factor);
         }
-        geometry.vertices.push(vatom, vmid);
-        geometry.colors.push(color, color);
+        vertex_arr.push(vatom, vmid);
+        color_arr.push(color, color);
       }
     }
   }
+  //console.log('add_bonds() vertex count: ' + vertex_arr.length);
   var linewidth = scale_by_height(this.conf.bond_line, this.win_size);
   var use_gl_lines = this.conf.line_style === 'simplistic';
-  var line_factory = new LineFactory({
+  var material = makeLineMaterial({
     gl_lines: use_gl_lines,
     linewidth: linewidth,
-    size: this.win_size,
-    as_segments: true,
+    win_size: this.win_size,
+    segments: true,
   });
-  //console.log('make_bonds() vertex count: ' + geometry.vertices.length);
-  this.atomic_objects.push(line_factory.make_line_segments(geometry));
+  this.atomic_objects.push(makeLineSegments(material, vertex_arr, color_arr));
   if (opt.balls) {
     this.atomic_objects.push(makeWheels(visible_atoms, colors, ball_size));
   } else if (!use_gl_lines && !ligands_only) {
@@ -492,21 +479,21 @@ ModelBag.prototype.add_bonds = function (ligands_only, ball_size) {
   }
 };
 
-ModelBag.prototype.add_trace = function (smoothness) {
+ModelBag.prototype.add_trace = function () {
   var segments = this.model.extract_trace();
   var visible_atoms = [].concat.apply([], segments);
   var colors = color_by(this.conf.color_aim, visible_atoms, this.conf.colors);
-  var line_factory = new LineFactory({
+  var material = makeLineMaterial({
     gl_lines: this.conf.line_style === 'simplistic',
     linewidth: scale_by_height(this.conf.bond_line, this.win_size),
-    size: this.win_size,
+    win_size: this.win_size,
   });
   var k = 0;
   for (var i = 0; i < segments.length; i++) {
     var seg = segments[i];
     var color_slice = colors.slice(k, k + seg.length);
     k += seg.length;
-    var line = line_factory.make_line(seg, color_slice, smoothness);
+    var line = makeLine(material, seg, color_slice);
     this.atomic_objects.push(line);
   }
 };
@@ -557,7 +544,7 @@ export function Viewer(options /*: {[key: string]: any}*/) {
     color_aim: COLOR_AIMS[0],
     line_style: LINE_STYLES[0],
     label_font: LABEL_FONTS[0],
-    colors: ColorSchemes[0],
+    colors: this.ColorSchemes[0],
     hydrogens: false,
   };
   this.set_colors();
@@ -583,6 +570,9 @@ export function Viewer(options /*: {[key: string]: any}*/) {
     this.controls = new Controls(this.camera, this.target);
   }
   this.raycaster = new THREE.Raycaster();
+  this.default_camera_pos = [0, 0, 100];
+  this.set_common_key_bindings();
+  if (this.constructor === Viewer) this.set_real_space_key_bindings();
   if (typeof document === 'undefined') return;  // for testing on node
 
   try {
@@ -653,7 +643,7 @@ export function Viewer(options /*: {[key: string]: any}*/) {
     // special case - centering on atoms after action 'pan' with no shift
     if (not_panned) {
       var atom = self.pick_atom(not_panned, self.camera);
-      if (atom !== null) {
+      if (atom != null) {
         self.select_atom(atom, {steps: 60 / auto_speed});
       }
     }
@@ -680,14 +670,15 @@ Viewer.prototype.pick_atom = function (coords, camera) {
 };
 
 Viewer.prototype.set_colors = function (scheme) {
+  function to_col(x) { return new THREE.Color(x); }
   if (scheme == null) {
-    scheme = ColorSchemes[0];
+    scheme = this.ColorSchemes[0];
   } else if (typeof scheme === 'number') {
-    scheme = ColorSchemes[scheme % ColorSchemes.length];
+    scheme = this.ColorSchemes[scheme % this.ColorSchemes.length];
   } else if (typeof scheme === 'string') {
-    for (var i = 0; i !== ColorSchemes.length; i++) {
-      if (ColorSchemes[i].name === scheme) {
-        scheme = ColorSchemes[i];
+    for (var i = 0; i !== this.ColorSchemes.length; i++) {
+      if (this.ColorSchemes[i].name === scheme) {
+        scheme = this.ColorSchemes[i];
         break;
       }
     }
@@ -696,11 +687,12 @@ Viewer.prototype.set_colors = function (scheme) {
   if (typeof scheme.bg === 'number') {
     for (var key in scheme) {
       if (key !== 'name') {
-        scheme[key] = new THREE.Color(scheme[key]);
+        scheme[key] = scheme[key] instanceof Array ? scheme[key].map(to_col)
+                                                   : to_col(scheme[key]);
       }
     }
   }
-  this.decor.zoom_grid.color_value.set(scheme.cell_box);
+  this.decor.zoom_grid.color_value.set(scheme.fg);
   this.redraw_all();
 };
 
@@ -740,7 +732,11 @@ Viewer.prototype.redraw_center = function () {
     if (this.mark) {
       this.scene.remove(this.mark);
     }
-    this.mark = makeCentralCube(0.1, this.target, this.config.colors.center);
+    this.mark = makeCube(0.1, this.target, {
+      color: this.config.colors.center,
+      linewidth: 2,
+      win_size: this.window_size,
+    });
     this.scene.add(this.mark);
   }
 };
@@ -822,7 +818,7 @@ Viewer.prototype.toggle_label = function (atom, show) {
     var label = makeLabel(text, {
       pos: atom.xyz,
       font: this.config.label_font,
-      color: '#' + this.config.colors.cell_box.getHexString(),
+      color: '#' + this.config.colors.fg.getHexString(),
       win_size: this.window_size,
     });
     if (!label) return;
@@ -840,7 +836,7 @@ Viewer.prototype.redraw_labels = function () {
     var text = uid;
     this.labels[uid].remake(text, {
       font: this.config.label_font,
-      color: '#' + this.config.colors.cell_box.getHexString(),
+      color: '#' + this.config.colors.fg.getHexString(),
     });
   }
 };
@@ -938,15 +934,17 @@ Viewer.prototype.change_map_radius = function (delta) {
 };
 
 Viewer.prototype.change_slab_width_by = function (delta) {
-  this.controls.change_slab_width(delta);
+  var slab_width = this.controls.slab_width;
+  slab_width[0] = Math.max(slab_width[0] + delta, 0.01);
+  slab_width[1] = Math.max(slab_width[1] + delta, 0.01);
   this.update_camera();
-  this.hud('clip width: ' + (this.camera.far - this.camera.near).toFixed(1));
+  this.hud('clip width: ' + (this.camera.far-this.camera.near).toPrecision(3));
 };
 
 Viewer.prototype.change_zoom_by_factor = function (mult) {
   this.camera.zoom *= mult;
   this.update_camera();
-  this.hud('zoom: ' + this.camera.zoom.toFixed(2));
+  this.hud('zoom: ' + this.camera.zoom.toPrecision(3));
 };
 
 Viewer.prototype.change_bond_line = function (delta) {
@@ -960,7 +958,7 @@ Viewer.prototype.change_map_line = function (delta) {
   this.config.map_line = Math.max(this.config.map_line + delta, 0.1);
   this.redraw_maps(true);
   this.hud('wireframe width: ' + this.config.map_line.toFixed(1));
-}
+};
 
 Viewer.prototype.toggle_full_screen = function () {
   var d = document;
@@ -993,8 +991,9 @@ Viewer.prototype.toggle_cell_box = function () {
       uc = this.map_bags[0].map.unit_cell;
     }
     if (uc) {
-      this.decor.cell_box = makeRgbBox(uc.orthogonalize,
-                                       this.config.colors.cell_box);
+      this.decor.cell_box = makeRgbBox(uc.orthogonalize, {
+        color: this.config.colors.fg,
+      });
       this.scene.add(this.decor.cell_box);
     }
   }
@@ -1004,11 +1003,9 @@ function vec3_to_fixed(vec, n) {
   return [vec.x.toFixed(n), vec.y.toFixed(n), vec.z.toFixed(n)];
 }
 
-Viewer.prototype.shift_clip = function (away) {
-  var eye = this.camera.position.clone().sub(this.target).setLength(1);
-  if (!away) {
-    eye.negate();
-  }
+Viewer.prototype.shift_clip = function (delta) {
+  var eye = this.camera.position.clone().sub(this.target);
+  eye.multiplyScalar(delta / eye.length());
   this.target.add(eye);
   this.camera.position.add(eye);
   this.update_camera();
@@ -1044,47 +1041,54 @@ Viewer.prototype.redraw_all = function () {
   this.redraw_labels();
 };
 
-Viewer.toggle_help = function (el) {
+Viewer.prototype.toggle_help = function (el) {
   if (!el) return;
   el.style.display = el.style.display === 'block' ? 'none' : 'block';
   if (el.innerHTML === '') {
-    el.innerHTML = [
-      '<b>mouse:</b>',
-      'Left = rotate',
-      'Middle or Ctrl+Left = pan',
-      'Right = zoom',
-      'Ctrl+Right = clipping',
-      'Ctrl+Shift+Right = roll',
-      'Wheel = σ level',
-      'Shift+Wheel = diff map σ',
-
-      '\n<b>keyboard:</b>',
-      'H = toggle help',
-      'T = representation',
-      'C = coloring',
-      'B = bg color',
-      'Q = label font',
-      '+/- = sigma level',
-      ']/[ = map radius',
-      'D/F = clip width',
-      'numpad 3/. = move clip',
-      'M/N = zoom',
-      'U = unitcell box',
-      'Y = hydrogens',
-      'R = center view',
-      'W = wireframe style',
-      'I = spin',
-      'K = rock',
-      'Home/End = bond width',
-      '\\ = bond caps',
-      'P = nearest Cα',
-      'Shift+P = permalink',
-      '(Shift+)space = next res.',
-      'Shift+F = full screen',
-
-      '\n<a href="https://uglymol.github.io">about uglymol</a>'].join('\n');
+    el.innerHTML = [this.MOUSE_HELP, this.KEYBOARD_HELP,
+                    this.ABOUT_HELP].join('\n\n');
   }
 };
+
+Viewer.prototype.MOUSE_HELP = [
+  '<b>mouse:</b>',
+  'Left = rotate',
+  'Middle or Ctrl+Left = pan',
+  'Right = zoom',
+  'Ctrl+Right = clipping',
+  'Ctrl+Shift+Right = roll',
+  'Wheel = σ level',
+  'Shift+Wheel = diff map σ',
+].join('\n');
+
+Viewer.prototype.KEYBOARD_HELP = [
+  '<b>keyboard:</b>',
+  'H = toggle help',
+  'T = representation',
+  'C = coloring',
+  'B = bg color',
+  'Q = label font',
+  '+/- = sigma level',
+  ']/[ = map radius',
+  'D/F = clip width',
+  'numpad 3/. = move clip',
+  'M/N = zoom',
+  'U = unitcell box',
+  'Y = hydrogens',
+  'R = center view',
+  'W = wireframe style',
+  'I = spin',
+  'K = rock',
+  'Home/End = bond width',
+  '\\ = bond caps',
+  'P = nearest Cα',
+  'Shift+P = permalink',
+  '(Shift+)space = next res.',
+  'Shift+F = full screen',
+].join('\n');
+
+Viewer.prototype.ABOUT_HELP =
+  '<a href="https://uglymol.github.io">about uglymol</a>';
 
 Viewer.prototype.select_next = function (info, key, options, back) {
   var old_idx = options.indexOf(this.config[key]);
@@ -1100,135 +1104,140 @@ Viewer.prototype.select_next = function (info, key, options, back) {
   this.hud(html, 'HTML');
 };
 
-Viewer.prototype.keydown = function (evt) {  // eslint-disable-line complexity
-  var key = evt.keyCode;
-  if (this.custom_keydown && key in this.custom_keydown) {
-    (this.custom_keydown[key])(evt);
-    this.request_render();
-    return;
-  }
-  switch (key) {
-    case 84:  // t
-      this.select_next('rendering as', 'render_style', RENDER_STYLES,
-                       evt.shiftKey);
-      this.redraw_models();
-      break;
-    case 66:  // b
-      this.select_next('color scheme', 'colors', ColorSchemes, evt.shiftKey);
-      this.set_colors(this.config.colors);
-      break;
-    case 67:  // c
-      this.select_next('coloring by', 'color_aim', COLOR_AIMS, evt.shiftKey);
-      this.redraw_models();
-      break;
-    case 87:  // w
-      this.select_next('map style', 'map_style', MAP_STYLES, evt.shiftKey);
-      this.redraw_maps(true);
-      break;
-    case 89:  // y
-      this.config.hydrogens = !this.config.hydrogens;
-      this.hud((this.config.hydrogens ? 'show' : 'hide') +
-               ' hydrogens (if any)');
-      this.redraw_models();
-      break;
-    case 220:  // \ (backslash)
-      this.select_next('bond lines', 'line_style', LINE_STYLES, evt.shiftKey);
-      this.redraw_models();
-      break;
-    case 107:  // add
-    case 61:  // equals/firefox
-    case 187:  // equal sign
-      this.change_isolevel_by(evt.shiftKey ? 1 : 0, 0.1);
-      break;
-    case 109:  // subtract
-    case 173:  // minus/firefox
-    case 189:  // dash
-      this.change_isolevel_by(evt.shiftKey ? 1 : 0, -0.1);
-      break;
-    case 219:  // [
-      this.change_map_radius(-2);
-      break;
-    case 221:  // ]
-      this.change_map_radius(2);
-      break;
-    case 68:  // d
-      this.change_slab_width_by(-0.1);
-      break;
-    case 70:  // f
-      if (evt.shiftKey) {
-        this.toggle_full_screen();
-      } else {
-        this.change_slab_width_by(0.1);
-      }
-      break;
-    case 77:  // m
-      this.change_zoom_by_factor(evt.shiftKey ? 1.2 : 1.03);
-      break;
-    case 78:  // n
-      this.change_zoom_by_factor(1 / (evt.shiftKey ? 1.2 : 1.03));
-      break;
-    case 80:  // p
-      evt.shiftKey ? this.permalink() : this.go_to_nearest_Ca();
-      break;
-    case 51:  // 3
-    case 99:  // numpad 3
-      this.shift_clip(true);
-      break;
-    case 108:  // numpad period (Linux)
-    case 110:  // decimal point (Mac)
-      this.shift_clip(false);
-      break;
-    case 85:  // u
-      this.hud('toggled unit cell box');
-      this.toggle_cell_box();
-      break;
-    case 73:  // i
-      this.hud('toggled spinning');
-      this.controls.toggle_auto(evt.shiftKey);
-      break;
-    case 75:  // k
-      this.hud('toggled rocking');
-      this.controls.toggle_auto(0.0);
-      break;
-    case 81:  // q
-      this.select_next('label font', 'label_font', LABEL_FONTS, evt.shiftKey);
-      this.redraw_labels();
-      break;
-    case 82:  // r
-      if (evt.shiftKey) {
-        this.hud('redraw!');
-        this.redraw_all();
-      } else {
-        this.hud('model recentered');
-        this.recenter();
-      }
-      break;
-    case 72:  // h
-      Viewer.toggle_help(this.help_el);
-      break;
-    case 36: // Home
-      evt.ctrlKey ? this.change_map_line(0.1) : this.change_bond_line(0.2);
-      break;
-    case 35: // End
-      evt.ctrlKey ? this.change_map_line(-0.1) : this.change_bond_line(-0.2);
-      break;
-    case 16: // shift
-    case 17: // ctrl
-    case 18: // alt
-    case 225: // altgr
-      break;
-    case 32: // Space
-      this.center_next_residue(evt.shiftKey);
-      break;
-    case 191: // slash
-    case 222: // single quote
-      evt.preventDefault();  // disable search bar in Firefox
-      // fallthrough
-    default:
-      if (this.help_el) this.hud('Nothing here. Press H for help.');
-      break;
+Viewer.prototype.keydown = function (evt) {
+  var action = this.key_bindings[evt.keyCode];
+  if (action) {
+    (action.bind(this))(evt);
+  } else {
+    if (action === false) evt.preventDefault();
+    if (this.help_el) this.hud('Nothing here. Press H for help.');
   }
   this.request_render();
+};
+
+Viewer.prototype.set_common_key_bindings = function () {
+  var kb = new Array(256);
+  // Home
+  kb[36] = function (evt) {
+    evt.ctrlKey ? this.change_map_line(0.1) : this.change_bond_line(0.2);
+  };
+  // End
+  kb[35] = function (evt) {
+    evt.ctrlKey ? this.change_map_line(-0.1) : this.change_bond_line(-0.2);
+  };
+  // b
+  kb[66] = function (evt) {
+    this.select_next('color scheme', 'colors', this.ColorSchemes, evt.shiftKey);
+    this.set_colors(this.config.colors);
+  };
+  // c
+  kb[67] = function (evt) {
+    this.select_next('coloring by', 'color_aim', COLOR_AIMS, evt.shiftKey);
+    this.redraw_models();
+  };
+  // d
+  kb[68] = function () { this.change_slab_width_by(-0.1); };
+  // f
+  kb[70] = function (evt) {
+    evt.shiftKey ? this.toggle_full_screen() : this.change_slab_width_by(0.1);
+  };
+  // h
+  kb[72] = function () {
+    this.toggle_help(this.help_el);
+  };
+  // i
+  kb[73] = function (evt) {
+    this.hud('toggled spinning');
+    this.controls.toggle_auto(evt.shiftKey);
+  };
+  // k
+  kb[75] = function () {
+    this.hud('toggled rocking');
+    this.controls.toggle_auto(0.0);
+  };
+  // m
+  kb[77] = function (evt) {
+    this.change_zoom_by_factor(evt.shiftKey ? 1.2 : 1.03);
+  };
+  // n
+  kb[78] = function (evt) {
+    this.change_zoom_by_factor(1 / (evt.shiftKey ? 1.2 : 1.03));
+  };
+  // q
+  kb[81] = function (evt) {
+    this.select_next('label font', 'label_font', LABEL_FONTS, evt.shiftKey);
+    this.redraw_labels();
+  };
+  // r
+  kb[82] = function (evt) {
+    if (evt.shiftKey) {
+      this.hud('redraw!');
+      this.redraw_all();
+    } else {
+      this.hud('recentered');
+      this.recenter();
+    }
+  };
+  // u
+  kb[85] = function () {
+    this.hud('toggled unit cell box');
+    this.toggle_cell_box();
+  };
+  // w
+  kb[87] = function (evt) {
+    this.select_next('map style', 'map_style', MAP_STYLES, evt.shiftKey);
+    this.redraw_maps(true);
+  };
+  // add, equals/firefox, equal sign
+  kb[107] = kb[61] = kb[187] = function (evt) {
+    this.change_isolevel_by(evt.shiftKey ? 1 : 0, 0.1);
+  };
+  // subtract, minus/firefox, dash
+  kb[109] = kb[173] = kb[189] = function (evt) {
+    this.change_isolevel_by(evt.shiftKey ? 1 : 0, -0.1);
+  };
+  // [
+  kb[219] = function () { this.change_map_radius(-2); };
+  // ]
+  kb[221] = function () { this.change_map_radius(2); };
+  // \ (backslash)
+  kb[220] = function (evt) {
+    this.select_next('bond lines', 'line_style', LINE_STYLES, evt.shiftKey);
+    this.redraw_models();
+  };
+  // 3, numpad 3
+  kb[51] = kb[99] = function () { this.shift_clip(1); };
+  // numpad period (Linux), decimal point (Mac)
+  kb[108] = kb[110] = function () { this.shift_clip(-1); };
+  // shift, ctrl, alt, altgr
+  kb[16] = kb[17] = kb[18] = kb[225] = function () {};
+  // slash, single quote
+  kb[191] = kb[222] = false;  // -> preventDefault()
+
+  this.key_bindings = kb;
+};
+
+Viewer.prototype.set_real_space_key_bindings = function () {
+  var kb = this.key_bindings;
+  // Space
+  kb[32] = function (evt) { this.center_next_residue(evt.shiftKey); };
+  // p
+  kb[80] = function (evt) {
+    evt.shiftKey ? this.permalink() : this.go_to_nearest_Ca();
+  };
+  // t
+  kb[84] = function (evt) {
+    this.select_next('rendering as', 'render_style', RENDER_STYLES,
+                     evt.shiftKey);
+    this.redraw_models();
+  };
+  // y
+  kb[89] = function (evt) {
+    this.config.hydrogens = !this.config.hydrogens;
+    this.hud((this.config.hydrogens ? 'show' : 'hide') +
+             ' hydrogens (if any)');
+    this.redraw_models();
+  };
 };
 
 Viewer.prototype.mousedown = function (event) {
@@ -1322,10 +1331,13 @@ Viewer.prototype.mousewheel = function (evt) {
   evt.preventDefault();
   evt.stopPropagation();
   // evt.wheelDelta for WebKit, evt.detail for Firefox
-  var delta = evt.wheelDelta ? evt.wheelDelta / 2000
-                             : (evt.detail || 0) / -1000;
-  this.change_isolevel_by(evt.shiftKey ? 1 : 0, delta);
+  var delta = evt.wheelDelta || -2 * (evt.detail || 0);
+  this.mousewheel_action(delta, evt);
   this.request_render();
+};
+
+Viewer.prototype.mousewheel_action = function (delta, evt) {
+  this.change_isolevel_by(evt.shiftKey ? 1 : 0, 0.0005 * delta);
 };
 
 Viewer.prototype.resize = function (/*evt*/) {
@@ -1387,7 +1399,8 @@ Viewer.prototype.recenter = function (xyz, cam, steps) {
       cam = new THREE.Vector3(cam[0], cam[1], cam[2]);
       new_up = null; // preserve the up direction
     } else {
-      cam = new THREE.Vector3(xyz[0], xyz[1], xyz[2] + 100);
+      var dc = this.default_camera_pos;
+      cam = new THREE.Vector3(xyz[0] + dc[0], xyz[1] + dc[1], xyz[2] + dc[2]);
       new_up = THREE.Object3D.DefaultUp; // Vector3(0, 1, 0)
     }
   }
@@ -1412,25 +1425,12 @@ Viewer.prototype.select_atom = function (atom, options) {
 
 Viewer.prototype.update_camera = function () {
   var dxyz = this.camera.position.distanceTo(this.target);
-  // the far plane is more distant from the target than the near plane (3:1)
-  var w = 0.25 * this.controls.slab_width() / this.camera.zoom;
-  this.camera.near = dxyz * (1 - w);
-  this.camera.far = dxyz * (1 + 3 * w);
+  var w = this.controls.slab_width;
+  var scale = w.length === 3 ? w[2] : this.camera.zoom;
+  this.camera.near = dxyz * (1 - w[0] / scale);
+  this.camera.far = dxyz * (1 + w[1] / scale);
   //this.light.position.copy(this.camera.position);
-  //var h_scale = this.camera.projectionMatrix.elements[5];
   this.camera.updateProjectionMatrix();
-  // temporary hack - scaling balls
-  /*
-  if (h_scale !== this.camera.projectionMatrix.elements[5]) {
-    var ball_size = Math.max(1, 80 * this.camera.projectionMatrix.elements[5]);
-    for (var i = 0; i < this.model_bags.length; i++) {
-      var obj = this.model_bags[i].atomic_objects;
-      if (obj.length === 2 && obj[1].material.size) {
-        obj[1].material.size = ball_size;
-      }
-    }
-  }
-  */
 };
 
 // The main loop. Running when a mouse button is pressed or when the view
@@ -1529,7 +1529,7 @@ Viewer.prototype.load_file = function (url, binary, callback, show_progress) {
 Viewer.prototype.set_view = function (options) {
   var frag = parse_url_fragment();
   if (frag.zoom) this.camera.zoom = frag.zoom;
-  this.recenter(options.center || frag.xyz, frag.eye, 1);
+  this.recenter(frag.xyz || options.center, frag.eye, 1);
 };
 
 // Load molecular model from PDB file and centers the view
@@ -1572,8 +1572,7 @@ Viewer.prototype.load_ccp4_maps = function (url1, url2, callback) {
   }, true);
 };
 
-// Load a model (PDB), normal map and a difference map. One after anotk
-// To show the first map ASAP we do not download both maps in parallel.
+// Load a model (PDB), normal map and a difference map - in this order.
 Viewer.prototype.load_pdb_and_ccp4_maps = function (pdb, map1, map2, callback) {
   var self = this;
   this.load_pdb(pdb, {callback: function () {
@@ -1600,6 +1599,6 @@ Viewer.prototype.show_nav = function (inset_id) {
 };
 */
 
-Viewer.ColorSchemes = ColorSchemes;
+Viewer.prototype.ColorSchemes = ColorSchemes;
 Viewer.auto_speed = auto_speed;
 

@@ -1,5 +1,5 @@
 /*!
- * UglyMol v0.5.1. Macromolecular Viewer for Crystallographers.
+ * UglyMol v0.5.2. Macromolecular Viewer for Crystallographers.
  * Copyright 2014 Nat Echols
  * Copyright 2016 Diamond Light Source Ltd
  * Copyright 2016 Marcin Wojdyr
@@ -11,7 +11,7 @@
   (factory((global.UM = global.UM || {}),global.THREE));
 }(this, (function (exports,THREE) { 'use strict';
 
-exports.VERSION = '0.5.1';
+exports.VERSION = '0.5.2';
 
 // eslint-disable-next-line max-params
 function UnitCell(a /*:number*/, b /*:number*/, c /*:number*/,
@@ -1473,6 +1473,11 @@ ElMap.prototype.isomesh_in_block = function (sigma, method) {
 
 // @flow
 
+/*:: type Num3 = [number, number, number] */
+/*:: type Atom = {xyz: Num3} */
+/*:: type Color = {r: number, g: number, b: number} */
+/*:: type Vector3 = {x: number, y: number, z: number} */
+
 var CUBE_EDGES = [[0, 0, 0], [1, 0, 0],
                   [0, 0, 0], [0, 1, 0],
                   [0, 0, 0], [0, 0, 1],
@@ -1486,56 +1491,92 @@ var CUBE_EDGES = [[0, 0, 0], [1, 0, 0],
                   [1, 1, 0], [1, 1, 1],
                   [0, 1, 1], [1, 1, 1]];
 
-function makeCentralCube(size /*:number*/,
-                                ctr /*:{x:number, y:number, z:number}*/,
-                                color /*:THREE.Color*/) {
-  var geometry = new THREE.Geometry();
-  for (var i = 0; i < CUBE_EDGES.length; i++) {
-    var a = CUBE_EDGES[i];
-    var x = ctr.x + size * (a[0] - 0.5);
-    var y = ctr.y + size * (a[1] - 0.5);
-    var z = ctr.z + size * (a[2] - 0.5);
-    geometry.vertices.push(new THREE.Vector3(x, y, z));
-  }
-  var material = new THREE.LineBasicMaterial({color: color, linewidth: 2});
-  return new THREE.LineSegments(geometry, material);
+function makeCube(size /*:number*/,
+                         ctr /*:Vector3*/,
+                         options /*:{[key:string]: any}*/) {
+  var vertices = CUBE_EDGES.map(function (a) {
+    return {
+      x: ctr.x + size * (a[0] - 0.5),
+      y: ctr.y + size * (a[1] - 0.5),
+      z: ctr.z + size * (a[2] - 0.5)};
+  });
+  var material = makeLineMaterial({
+    gl_lines: true,
+    color: options.color,
+    linewidth: options.linewidth,
+    win_size: options.win_size,
+    segments: true,
+  });
+  return makeLineSegments(material, vertices);
 }
 
 // A cube with 3 edges (for x, y, z axes) colored in red, green and blue.
-function makeRgbBox(transform_func /*: number[] => number[]*/,
-                           color /*:THREE.Color*/) {
-  var geometry = new THREE.Geometry();
-  for (var i = 0; i < CUBE_EDGES.length; i++) {
-    var xyz = transform_func(CUBE_EDGES[i]);
-    geometry.vertices.push(new THREE.Vector3(xyz[0], xyz[1], xyz[2]));
-  }
-  geometry.colors.push(
+function makeRgbBox(transform_func /*:Num3 => Num3*/,
+                           options /*:{[key:string]: any}*/) {
+  // flow-ignore-line - union in makeLineMaterial() confuses flow
+  var vertices = CUBE_EDGES.map(function (a) {
+    return { xyz: transform_func(a) };
+  });
+  var colors = [
     new THREE.Color(0xff0000), new THREE.Color(0xffaa00),
     new THREE.Color(0x00ff00), new THREE.Color(0xaaff00),
-    new THREE.Color(0x0000ff), new THREE.Color(0x00aaff)
-  );
+    new THREE.Color(0x0000ff), new THREE.Color(0x00aaff),
+  ];
   for (var j = 6; j < CUBE_EDGES.length; j++) {
-    geometry.colors.push(color);
+    colors.push(options.color);
   }
-  var material = new THREE.LineBasicMaterial({vertexColors:
-                                                THREE.VertexColors});
-  return new THREE.LineSegments(geometry, material);
+  var material = makeLineMaterial({
+    gl_lines: true,
+    linewidth: 1,
+    segments: true,
+  });
+  return makeLineSegments(material, vertices, colors);
 }
 
+function double_pos(vertex_arr /*:Vector3[] | Atom[]*/) {
+  var pos = [];
+  var i;
+  if (vertex_arr && vertex_arr[0].xyz) {
+    for (i = 0; i < vertex_arr.length; i++) {
+      // flow-ignore-line - disjoint unions not smart enough
+      var xyz /*:Num3*/ = vertex_arr[i].xyz;
+      pos.push(xyz[0], xyz[1], xyz[2]);
+      pos.push(xyz[0], xyz[1], xyz[2]);
+    }
+  } else {
+    for (i = 0; i < vertex_arr.length; i++) {
+      // flow-ignore-line
+      var v /*:Vector3*/ = vertex_arr[i];
+      pos.push(v.x, v.y, v.z);
+      pos.push(v.x, v.y, v.z);
+    }
+  }
+  return pos;
+}
+
+function double_color(color_arr /*:Color[]*/) {
+  var len = color_arr.length;
+  var color = new Float32Array(6*len);
+  for (var i = 0; i < len; i++) {
+    var col = color_arr[i];
+    color[6*i] = col.r;
+    color[6*i+1] = col.g;
+    color[6*i+2] = col.b;
+    color[6*i+3] = col.r;
+    color[6*i+4] = col.g;
+    color[6*i+5] = col.b;
+  }
+  return color;
+}
 
 // input arrays must be of the same length
 function wide_line_geometry(vertex_arr, color_arr) {
   var len = vertex_arr.length;
-  var i;
-  var pos = [];
-  for (i = 0; i < len; i++) {
-    var v = vertex_arr[i];
-    pos.push(v.x, v.y, v.z);
-    pos.push(v.x, v.y, v.z);
-  }
+  var pos = double_pos(vertex_arr);
   var position = new Float32Array(pos);
   // could we use three overlapping views of the same buffer?
   var previous = new Float32Array(6*len);
+  var i;
   for (i = 0; i < 6; i++) previous[i] = pos[i];
   for (; i < 6 * len; i++) previous[i] = pos[i-6];
   var next = new Float32Array(6*len);
@@ -1546,16 +1587,7 @@ function wide_line_geometry(vertex_arr, color_arr) {
     side[2*i] = 1;
     side[2*i+1] = -1;
   }
-  var color = new Float32Array(6*len);
-  for (i = 0; i < len; i++) {
-    var col = color_arr[i];
-    color[6*i] = col.r;
-    color[6*i+1] = col.g;
-    color[6*i+2] = col.b;
-    color[6*i+3] = col.r;
-    color[6*i+4] = col.g;
-    color[6*i+5] = col.b;
-  }
+  var color = double_color(color_arr);
   var geometry = new THREE.BufferGeometry();
   geometry.addAttribute('position', new THREE.BufferAttribute(position, 3));
   geometry.addAttribute('previous', new THREE.BufferAttribute(previous, 3));
@@ -1571,12 +1603,7 @@ function wide_segments_geometry(vertex_arr, color_arr) {
   var len = vertex_arr.length;
   var i;
   var j;
-  var pos = [];
-  for (i = 0; i < len; i++) {
-    var v = vertex_arr[i];
-    pos.push(v.x, v.y, v.z);
-    pos.push(v.x, v.y, v.z);
-  }
+  var pos = double_pos(vertex_arr);
   var position = new Float32Array(pos);
   var other_vert = new Float32Array(6*len);
   for (i = 0; i < 6 * len; i += 12) {
@@ -1587,16 +1614,6 @@ function wide_segments_geometry(vertex_arr, color_arr) {
   for (i = 0; i < len; i++) {
     side[2*i] = -1;
     side[2*i+1] = 1;
-  }
-  var color = new Float32Array(6*len);
-  for (i = 0; i < len; i++) {
-    var col = color_arr[i];
-    color[6*i] = col.r;
-    color[6*i+1] = col.g;
-    color[6*i+2] = col.b;
-    color[6*i+3] = col.r;
-    color[6*i+4] = col.g;
-    color[6*i+5] = col.b;
   }
   var index = (2*len < 65536 ? new Uint16Array(3*len)
                              : new Uint32Array(3*len));
@@ -1610,7 +1627,10 @@ function wide_segments_geometry(vertex_arr, color_arr) {
   geometry.addAttribute('position', new THREE.BufferAttribute(position, 3));
   geometry.addAttribute('other', new THREE.BufferAttribute(other_vert, 3));
   geometry.addAttribute('side', new THREE.BufferAttribute(side, 1));
-  geometry.addAttribute('color', new THREE.BufferAttribute(color, 3));
+  if (color_arr != null) {
+    var color = double_color(color_arr);
+    geometry.addAttribute('color', new THREE.BufferAttribute(color, 3));
+  }
   geometry.setIndex(new THREE.BufferAttribute(index, 1));
   return geometry;
 }
@@ -1620,17 +1640,17 @@ var wide_line_vert = [
   'attribute vec3 previous;',
   'attribute vec3 next;',
   'attribute float side;',
-  'uniform vec2 size;',
+  'uniform vec2 win_size;',
   'uniform float linewidth;',
   'varying vec3 vcolor;',
 
   'void main() {',
   '  vcolor = color;',
   '  mat4 mat = projectionMatrix * modelViewMatrix;',
-  '  vec2 dir1 = (mat * vec4(next - position, 0.0)).xy * size;',
+  '  vec2 dir1 = (mat * vec4(next - position, 0.0)).xy * win_size;',
   '  float len = length(dir1);',
   '  if (len > 0.0) dir1 /= len;',
-  '  vec2 dir2 = (mat * vec4(position - previous, 0.0)).xy * size;',
+  '  vec2 dir2 = (mat * vec4(position - previous, 0.0)).xy * win_size;',
   '  len = length(dir2);',
   '  dir2 = len > 0.0 ? dir2 / len : dir1;',
   '  vec2 tang = normalize(dir1 + dir2);',
@@ -1642,13 +1662,13 @@ var wide_line_vert = [
   '  float outer = side * dot(dir2, normal);',
   '  float angle_factor = max(dot(tang, dir2), outer > 0.0 ? 0.5 : 0.1);',
   '  gl_Position = mat * vec4(position, 1.0);',
-  '  gl_Position.xy += side * linewidth / angle_factor * normal / size;',
+  '  gl_Position.xy += side * linewidth / angle_factor * normal / win_size;',
   '}'].join('\n');
 
 var wide_segments_vert = [
   'attribute vec3 other;',
   'attribute float side;',
-  'uniform vec2 size;',
+  'uniform vec2 win_size;',
   'uniform float linewidth;',
   'varying vec3 vcolor;',
 
@@ -1658,7 +1678,7 @@ var wide_segments_vert = [
   '  vec2 dir = normalize((mat * vec4(position - other, 0.0)).xy);',
   '  vec2 normal = vec2(-dir.y, dir.x);',
   '  gl_Position = mat * vec4(position, 1.0);',
-  '  gl_Position.xy += side * linewidth * normal / size;',
+  '  gl_Position.xy += side * linewidth * normal / win_size;',
   '}'].join('\n');
 
 var wide_line_frag = [
@@ -1670,7 +1690,7 @@ var wide_line_frag = [
   '}'].join('\n');
 
 
-function interpolate_vertices(segment, smooth) {
+function interpolate_vertices(segment, smooth) /*:Vector3[]*/{
   var vertices = [];
   for (var i = 0; i < segment.length; i++) {
     var xyz = segment[i].xyz;
@@ -1724,40 +1744,6 @@ function make_uniforms(params) {
   return uniforms;
 }
 
-function rgb_to_buf(colors) {
-  var arr = new Float32Array(colors.length * 3);
-  for (var i = 0; i < colors.length; i++) {
-    var c = colors[i];
-    arr[3*i] = c.r;
-    arr[3*i+1] = c.g;
-    arr[3*i+2] = c.b;
-  }
-  return arr;
-}
-
-function xyz_to_buf(vectors) {
-  var arr = new Float32Array(vectors.length * 3);
-  for (var i = 0; i < vectors.length; i++) {
-    var v = vectors[i];
-    arr[3*i] = v.x;
-    arr[3*i+1] = v.y;
-    arr[3*i+2] = v.z;
-  }
-  return arr;
-}
-
-function atoms_to_buf(atoms) {
-  var arr = new Float32Array(atoms.length * 3);
-  for (var i = 0; i < atoms.length; i++) {
-    var xyz = atoms[i].xyz;
-    arr[3*i] = xyz[0];
-    arr[3*i+1] = xyz[1];
-    arr[3*i+2] = xyz[2];
-  }
-  return arr;
-}
-
-
 var ribbon_vert = [
   //'attribute vec3 normal;' is added by default for ShaderMaterial
   'uniform float shift;',
@@ -1777,19 +1763,15 @@ var ribbon_frag = [
   '}'].join('\n');
 
 // 9-line ribbon
-function makeRibbon(vertices /*: Array<{xyz: [number,number,number]}>*/,
-                           colors /*: Array<THREE.Color>*/,
-                           tangents /*: Array<[number,number,number]>*/,
-                           smoothness /*: number*/) {
+function makeRibbon(vertices /*:Atom[]*/,
+                           colors /*:Color[]*/,
+                           tangents /*:Num3[]*/,
+                           smoothness /*:number*/) {
   var vertex_arr = interpolate_vertices(vertices, smoothness);
   var color_arr = interpolate_colors(colors, smoothness);
   var tang_arr = interpolate_directions(tangents, smoothness);
   var obj = new THREE.Object3D();
-  var geometry = new THREE.BufferGeometry();
-  var pos = xyz_to_buf(vertex_arr);
-  geometry.addAttribute('position', new THREE.BufferAttribute(pos, 3));
-  var col = rgb_to_buf(color_arr);
-  geometry.addAttribute('color', new THREE.BufferAttribute(col, 3));
+  var geometry = makeSimpleGeometry(vertex_arr, color_arr);
   var tan = new Float32Array(tang_arr);
   // it's not 'normal', but it doesn't matter
   geometry.addAttribute('normal', new THREE.BufferAttribute(tan, 3));
@@ -1809,8 +1791,8 @@ function makeRibbon(vertices /*: Array<{xyz: [number,number,number]}>*/,
 }
 
 
-function makeChickenWire(data /*: {vertices: number[], segments: number[]}*/,
-                         parameters /*: {[key: string]: any}*/) {
+function makeChickenWire(data /*:{vertices: number[], segments: number[]}*/,
+                         parameters /*:{[key: string]: any}*/) {
   var geom = new THREE.BufferGeometry();
   var position = new Float32Array(data.vertices);
   geom.addAttribute('position', new THREE.BufferAttribute(position, 3));
@@ -1881,58 +1863,105 @@ function makeGrid() {
 }
 
 
-function LineFactory(options /*: {[key: string]: mixed}*/) {
+function makeSimpleLineMaterial(options) {
   var mparams = {};
   mparams.linewidth = options.linewidth;
-  this.use_gl_lines = options.gl_lines;
-  if (this.use_gl_lines) {
-    if (options.color === undefined) {
-      mparams.vertexColors = THREE.VertexColors;
-    } else {
-      mparams.color = options.color;
-    }
-    this.material = new THREE.LineBasicMaterial(mparams);
+  if (options.color === undefined) {
+    mparams.vertexColors = THREE.VertexColors;
   } else {
-    mparams.size = options.size;
-    this.material = new THREE.ShaderMaterial({
-      uniforms: make_uniforms(mparams),
-      vertexShader: options.as_segments ? wide_segments_vert : wide_line_vert,
-      fragmentShader: wide_line_frag,
-      fog: true,
-      vertexColors: THREE.VertexColors,
-    });
+    mparams.color = options.color;
   }
+  return new THREE.LineBasicMaterial(mparams);
 }
 
-LineFactory.prototype.make_line = function (vertices, colors, smoothness) {
-  var vertex_arr = interpolate_vertices(vertices, smoothness);
-  var color_arr = interpolate_colors(colors, smoothness);
-  if (this.use_gl_lines) {
-    var geometry = new THREE.BufferGeometry();
-    var pos = xyz_to_buf(vertex_arr);
-    geometry.addAttribute('position', new THREE.BufferAttribute(pos, 3));
-    var col = rgb_to_buf(color_arr);
-    geometry.addAttribute('color', new THREE.BufferAttribute(col, 3));
-    return new THREE.Line(geometry, this.material);
+function makeThickLineMaterial(options) {
+  var uniforms = make_uniforms({
+    linewidth: options.linewidth,
+    win_size: options.win_size,
+  });
+  return new THREE.ShaderMaterial({
+    uniforms: uniforms,
+    vertexShader: options.segments ? wide_segments_vert : wide_line_vert,
+    fragmentShader: wide_line_frag,
+    fog: true,
+    vertexColors: THREE.VertexColors,
+  });
+}
+
+function makeLineMaterial(options /*:{[key: string]: mixed}*/) {
+  return options.gl_lines ? makeSimpleLineMaterial(options)
+                          : makeThickLineMaterial(options);
+}
+
+function makeSimpleGeometry(vertices /*:Vector3[] | Atom[]*/,
+                            colors /*:?Color[]*/) {
+  var geometry = new THREE.BufferGeometry();
+  var pos = new Float32Array(vertices.length * 3);
+  var i;
+  if (vertices && vertices[0].xyz) {
+    for (i = 0; i < vertices.length; i++) {
+      // flow-ignore-line - disjoint unions not smart enough
+      var xyz /*:Num3*/ = vertices[i].xyz;
+      pos[3*i] = xyz[0];
+      pos[3*i+1] = xyz[1];
+      pos[3*i+2] = xyz[2];
+    }
+  } else {
+    for (i = 0; i < vertices.length; i++) {
+      // flow-ignore-line
+      var v /*:Vector3*/ = vertices[i];
+      pos[3*i] = v.x;
+      pos[3*i+1] = v.y;
+      pos[3*i+2] = v.z;
+    }
   }
-  var mesh = new THREE.Mesh(wide_line_geometry(vertex_arr, color_arr),
-                            this.material);
+  geometry.addAttribute('position', new THREE.BufferAttribute(pos, 3));
+  if (colors != null) {
+    var col = new Float32Array(colors.length * 3);
+    for (i = 0; i < colors.length; i++) {
+      var c = colors[i];
+      col[3*i] = c.r;
+      col[3*i+1] = c.g;
+      col[3*i+2] = c.b;
+    }
+    geometry.addAttribute('color', new THREE.BufferAttribute(col, 3));
+  }
+  return geometry;
+}
+
+function makeThickLine(material, vertices, colors) {
+  var mesh = new THREE.Mesh(wide_line_geometry(vertices, colors), material);
   mesh.drawMode = THREE.TriangleStripDrawMode;
   mesh.raycast = line_raycast;
   return mesh;
-};
+}
 
-LineFactory.prototype.make_line_segments = function (geometry) {
-  if (this.use_gl_lines) {
-    return new THREE.LineSegments(geometry, this.material);
+function makeLine(material /*:THREE.Material*/,
+                         vertices /*:Vector3[]*/,
+                         colors /*:Color[]*/) {
+  if (material.isShaderMaterial) {
+    return makeThickLine(material, vertices, colors);
+  } else {
+    return new THREE.Line(makeSimpleGeometry(vertices, colors), material);
   }
-  var vertex_arr = geometry.vertices;
-  var color_arr = geometry.colors;
-  var mesh = new THREE.Mesh(wide_segments_geometry(vertex_arr, color_arr),
-                            this.material);
+}
+
+function makeThickLineSegments(material, vertices, colors) {
+  var mesh = new THREE.Mesh(wide_segments_geometry(vertices, colors), material);
   mesh.raycast = line_raycast;
   return mesh;
-};
+}
+
+function makeLineSegments(material /*:THREE.Material*/,
+                                 vertices /*:Vector3[] | Atom[]*/,
+                                 colors /*:?Color[]*/) {
+  if (material.isShaderMaterial) {
+    return makeThickLineSegments(material, vertices, colors);
+  } else {
+    return new THREE.LineSegments(makeSimpleGeometry(vertices, colors),
+                                  material);
+  }
+}
 
 var wheel_vert = [
   'uniform float size;',
@@ -1954,14 +1983,10 @@ var wheel_frag = [
   '#include <fog_fragment>',
   '}'].join('\n');
 
-function makeWheels(atom_arr /*:{xyz: [number,number,number]}[]*/,
-                           color_arr /*:THREE.Color[]*/,
+function makeWheels(atom_arr /*:Atom[]*/,
+                           color_arr /*:Color[]*/,
                            size /*:number*/) {
-  var positions = atoms_to_buf(atom_arr);
-  var colors = rgb_to_buf(color_arr);
-  var geometry = new THREE.BufferGeometry();
-  geometry.addAttribute('position', new THREE.BufferAttribute(positions, 3));
-  geometry.addAttribute('color', new THREE.BufferAttribute(colors, 3));
+  var geometry = makeSimpleGeometry(atom_arr, color_arr);
   var material = new THREE.ShaderMaterial({
     uniforms: make_uniforms({size: size}),
     vertexShader: wheel_vert,
@@ -2081,17 +2106,27 @@ function makeLabel(text /*:string*/, options /*:{[key:string]: any}*/) {
   return mesh;
 }
 
+// Add vertices of a 3d cross (representation of an unbonded atom)
+function addXyzCross(vertices /*:Vector3[]*/, xyz /*:Num3*/, r /*:number*/) {
+  vertices.push(new THREE.Vector3(xyz[0]-r, xyz[1], xyz[2]));
+  vertices.push(new THREE.Vector3(xyz[0]+r, xyz[1], xyz[2]));
+  vertices.push(new THREE.Vector3(xyz[0], xyz[1]-r, xyz[2]));
+  vertices.push(new THREE.Vector3(xyz[0], xyz[1]+r, xyz[2]));
+  vertices.push(new THREE.Vector3(xyz[0], xyz[1], xyz[2]-r));
+  vertices.push(new THREE.Vector3(xyz[0], xyz[1], xyz[2]+r));
+}
+
 // @flow
 
-var ColorSchemes = [ // accessible as Viewer.ColorSchemes
+var ColorSchemes = [ // Viewer.prototype.ColorSchemes
   { // generally mimicks Coot
     name: 'coot dark',
     bg: 0x000000,
+    fg: 0xFFFFFF,
     map_den: 0x3362B2,
     map_pos: 0x298029,
     map_neg: 0x8B2E2E,
     center: 0xC997B0,
-    cell_box: 0xFFFFFF,
     // atoms
     H: 0x858585, // H is normally invisible
     // C, N and O are taken approximately (by color-picker) from coot
@@ -2117,11 +2152,11 @@ var ColorSchemes = [ // accessible as Viewer.ColorSchemes
   {
     name: 'solarized dark',
     bg: 0x002b36,
+    fg: 0xfdf6e3,
     map_den: 0x268bd2,
     map_pos: 0x859900,
     map_neg: 0xd33682,
     center: 0xfdf6e3,
-    cell_box: 0xfdf6e3,
     H: 0x586e75,
     C: 0x93a1a1,
     N: 0x6c71c4,
@@ -2132,11 +2167,11 @@ var ColorSchemes = [ // accessible as Viewer.ColorSchemes
   {
     name: 'solarized light',
     bg: 0xfdf6e3,
+    fg: 0x002b36,
     map_den: 0x268bd2,
     map_pos: 0x859900,
     map_neg: 0xd33682,
     center: 0x002b36,
-    cell_box: 0x002b36,
     H: 0x93a1a1,
     C: 0x586e75,
     N: 0x6c71c4,
@@ -2147,11 +2182,11 @@ var ColorSchemes = [ // accessible as Viewer.ColorSchemes
   { // like in Coot after Edit > Background Color > White
     name: 'coot light',
     bg: 0xFFFFFF,
+    fg: 0x000000,
     map_den: 0x3362B2,
     map_pos: 0x298029,
     map_neg: 0x8B2E2E,
     center: 0xC7C769,
-    cell_box: 0x000000,
     H: 0x999999,
     C: 0xA96464,
     N: 0x1C51B3,
@@ -2197,14 +2232,12 @@ var Controls = function (camera, target) {
   var _pan_start = new THREE.Vector2();
   var _pan_end = new THREE.Vector2();
   var _panned = true;
-  var _slab_width = 10.0;
   var _rotating = null;
   var _auto_stamp = null;
   var _go_func = null;
 
-  function change_slab_width(delta) {
-    _slab_width = Math.max(_slab_width + delta, 0.01);
-  }
+  // the far plane is more distant from the target than the near plane (3:1)
+  this.slab_width = [2.5, 7.5];
 
   function rotate_camera(eye) {
     var quat = new THREE.Quaternion();
@@ -2221,12 +2254,12 @@ var Controls = function (camera, target) {
     if (_state === STATE.ZOOM) {
       camera.zoom /= (1 - dx + dy);
     } else if (_state === STATE.SLAB) {
-      change_slab_width(10.0 * dx);
       target.addScaledVector(eye, -5.0 / eye.length() * dy);
     } else if (_state === STATE.ROLL) {
       camera.up.applyAxisAngle(eye, 0.05 * (dx - dy));
     }
     _zoom_start.copy(_zoom_end);
+    return _state === STATE.SLAB ? 10*dx : null;
   }
 
   function pan_camera(eye) {
@@ -2287,7 +2320,11 @@ var Controls = function (camera, target) {
       changed = true;
     }
     if (!_zoom_end.equals(_zoom_start)) {
-      zoom_camera(eye);
+      var dslab = zoom_camera(eye);
+      if (dslab) {
+        this.slab_width[0] = Math.max(this.slab_width[0] + dslab, 0.01);
+        this.slab_width[1] = Math.max(this.slab_width[1] + dslab, 0.01);
+      }
       changed = true;
     }
     if (!_pan_end.equals(_pan_start)) {
@@ -2365,9 +2402,6 @@ var Controls = function (camera, target) {
     _pan_start.copy(_pan_end);
     return ret;
   };
-
-  this.slab_width = function () { return _slab_width; };
-  this.change_slab_width = change_slab_width;
 
   this.go_to = function (targ, cam_pos, cam_up, steps) {
     if (targ instanceof Array) {
@@ -2466,22 +2500,6 @@ function color_by(style, atoms, elem_colors) {
   return colors;
 }
 
-// Add a representation of an unbonded atom as a cross to geometry
-function add_isolated_atom(geometry, atom, color) {
-  var c = atom.xyz;
-  var R = 0.7;
-  geometry.vertices.push(new THREE.Vector3(c[0]-R, c[1], c[2]));
-  geometry.vertices.push(new THREE.Vector3(c[0]+R, c[1], c[2]));
-  geometry.vertices.push(new THREE.Vector3(c[0], c[1]-R, c[2]));
-  geometry.vertices.push(new THREE.Vector3(c[0], c[1]+R, c[2]));
-  geometry.vertices.push(new THREE.Vector3(c[0], c[1], c[2]-R));
-  geometry.vertices.push(new THREE.Vector3(c[0], c[1], c[2]+R));
-  for (var i = 0; i < 6; i++) {
-    geometry.colors.push(color);
-  }
-}
-
-
 function MapBag(map, is_diff_map) {
   this.map = map;
   this.name = '';
@@ -2520,7 +2538,8 @@ ModelBag.prototype.add_bonds = function (ligands_only, ball_size) {
   var visible_atoms = this.get_visible_atoms();
   var color_style = ligands_only ? 'element' : this.conf.color_aim;
   var colors = color_by(color_style, visible_atoms, this.conf.colors);
-  var geometry = new THREE.Geometry();
+  var vertex_arr /*:THREE.Vector3[]*/ = [];
+  var color_arr = [];
   var opt = { hydrogens: this.conf.hydrogens,
               ligands_only: ligands_only,
               balls: this.conf.render_style === 'ball&stick' };
@@ -2529,7 +2548,10 @@ ModelBag.prototype.add_bonds = function (ligands_only, ball_size) {
     var color = colors[i];
     if (ligands_only && !atom.is_ligand) continue;
     if (atom.bonds.length === 0 && !opt.balls) { // nonbonded, draw star
-      add_isolated_atom(geometry, atom, color);
+      addXyzCross(vertex_arr, atom.xyz, 0.7);
+      for (var n = 0; n < 6; n++) {
+        color_arr.push(color);
+      }
     } else { // bonded, draw lines
       for (var j = 0; j < atom.bonds.length; j++) {
         var other = this.model.atoms[atom.bonds[j]];
@@ -2542,24 +2564,23 @@ ModelBag.prototype.add_bonds = function (ligands_only, ball_size) {
         var vatom = new THREE.Vector3(atom.xyz[0], atom.xyz[1], atom.xyz[2]);
         if (opt.balls) {
           var lerp_factor = vatom.distanceTo(vmid) / ball_size;
-          //color = this.conf.colors.def; // for debugging only
           vatom.lerp(vmid, lerp_factor);
         }
-        geometry.vertices.push(vatom, vmid);
-        geometry.colors.push(color, color);
+        vertex_arr.push(vatom, vmid);
+        color_arr.push(color, color);
       }
     }
   }
+  //console.log('add_bonds() vertex count: ' + vertex_arr.length);
   var linewidth = scale_by_height(this.conf.bond_line, this.win_size);
   var use_gl_lines = this.conf.line_style === 'simplistic';
-  var line_factory = new LineFactory({
+  var material = makeLineMaterial({
     gl_lines: use_gl_lines,
     linewidth: linewidth,
-    size: this.win_size,
-    as_segments: true,
+    win_size: this.win_size,
+    segments: true,
   });
-  //console.log('make_bonds() vertex count: ' + geometry.vertices.length);
-  this.atomic_objects.push(line_factory.make_line_segments(geometry));
+  this.atomic_objects.push(makeLineSegments(material, vertex_arr, color_arr));
   if (opt.balls) {
     this.atomic_objects.push(makeWheels(visible_atoms, colors, ball_size));
   } else if (!use_gl_lines && !ligands_only) {
@@ -2568,21 +2589,21 @@ ModelBag.prototype.add_bonds = function (ligands_only, ball_size) {
   }
 };
 
-ModelBag.prototype.add_trace = function (smoothness) {
+ModelBag.prototype.add_trace = function () {
   var segments = this.model.extract_trace();
   var visible_atoms = [].concat.apply([], segments);
   var colors = color_by(this.conf.color_aim, visible_atoms, this.conf.colors);
-  var line_factory = new LineFactory({
+  var material = makeLineMaterial({
     gl_lines: this.conf.line_style === 'simplistic',
     linewidth: scale_by_height(this.conf.bond_line, this.win_size),
-    size: this.win_size,
+    win_size: this.win_size,
   });
   var k = 0;
   for (var i = 0; i < segments.length; i++) {
     var seg = segments[i];
     var color_slice = colors.slice(k, k + seg.length);
     k += seg.length;
-    var line = line_factory.make_line(seg, color_slice, smoothness);
+    var line = makeLine(material, seg, color_slice);
     this.atomic_objects.push(line);
   }
 };
@@ -2633,7 +2654,7 @@ function Viewer(options /*: {[key: string]: any}*/) {
     color_aim: COLOR_AIMS[0],
     line_style: LINE_STYLES[0],
     label_font: LABEL_FONTS[0],
-    colors: ColorSchemes[0],
+    colors: this.ColorSchemes[0],
     hydrogens: false,
   };
   this.set_colors();
@@ -2659,6 +2680,9 @@ function Viewer(options /*: {[key: string]: any}*/) {
     this.controls = new Controls(this.camera, this.target);
   }
   this.raycaster = new THREE.Raycaster();
+  this.default_camera_pos = [0, 0, 100];
+  this.set_common_key_bindings();
+  if (this.constructor === Viewer) this.set_real_space_key_bindings();
   if (typeof document === 'undefined') return;  // for testing on node
 
   try {
@@ -2729,7 +2753,7 @@ function Viewer(options /*: {[key: string]: any}*/) {
     // special case - centering on atoms after action 'pan' with no shift
     if (not_panned) {
       var atom = self.pick_atom(not_panned, self.camera);
-      if (atom !== null) {
+      if (atom != null) {
         self.select_atom(atom, {steps: 60 / auto_speed});
       }
     }
@@ -2756,14 +2780,15 @@ Viewer.prototype.pick_atom = function (coords, camera) {
 };
 
 Viewer.prototype.set_colors = function (scheme) {
+  function to_col(x) { return new THREE.Color(x); }
   if (scheme == null) {
-    scheme = ColorSchemes[0];
+    scheme = this.ColorSchemes[0];
   } else if (typeof scheme === 'number') {
-    scheme = ColorSchemes[scheme % ColorSchemes.length];
+    scheme = this.ColorSchemes[scheme % this.ColorSchemes.length];
   } else if (typeof scheme === 'string') {
-    for (var i = 0; i !== ColorSchemes.length; i++) {
-      if (ColorSchemes[i].name === scheme) {
-        scheme = ColorSchemes[i];
+    for (var i = 0; i !== this.ColorSchemes.length; i++) {
+      if (this.ColorSchemes[i].name === scheme) {
+        scheme = this.ColorSchemes[i];
         break;
       }
     }
@@ -2772,11 +2797,12 @@ Viewer.prototype.set_colors = function (scheme) {
   if (typeof scheme.bg === 'number') {
     for (var key in scheme) {
       if (key !== 'name') {
-        scheme[key] = new THREE.Color(scheme[key]);
+        scheme[key] = scheme[key] instanceof Array ? scheme[key].map(to_col)
+                                                   : to_col(scheme[key]);
       }
     }
   }
-  this.decor.zoom_grid.color_value.set(scheme.cell_box);
+  this.decor.zoom_grid.color_value.set(scheme.fg);
   this.redraw_all();
 };
 
@@ -2816,7 +2842,11 @@ Viewer.prototype.redraw_center = function () {
     if (this.mark) {
       this.scene.remove(this.mark);
     }
-    this.mark = makeCentralCube(0.1, this.target, this.config.colors.center);
+    this.mark = makeCube(0.1, this.target, {
+      color: this.config.colors.center,
+      linewidth: 2,
+      win_size: this.window_size,
+    });
     this.scene.add(this.mark);
   }
 };
@@ -2898,7 +2928,7 @@ Viewer.prototype.toggle_label = function (atom, show) {
     var label = makeLabel(text, {
       pos: atom.xyz,
       font: this.config.label_font,
-      color: '#' + this.config.colors.cell_box.getHexString(),
+      color: '#' + this.config.colors.fg.getHexString(),
       win_size: this.window_size,
     });
     if (!label) return;
@@ -2916,7 +2946,7 @@ Viewer.prototype.redraw_labels = function () {
     var text = uid;
     this.labels[uid].remake(text, {
       font: this.config.label_font,
-      color: '#' + this.config.colors.cell_box.getHexString(),
+      color: '#' + this.config.colors.fg.getHexString(),
     });
   }
 };
@@ -3014,15 +3044,17 @@ Viewer.prototype.change_map_radius = function (delta) {
 };
 
 Viewer.prototype.change_slab_width_by = function (delta) {
-  this.controls.change_slab_width(delta);
+  var slab_width = this.controls.slab_width;
+  slab_width[0] = Math.max(slab_width[0] + delta, 0.01);
+  slab_width[1] = Math.max(slab_width[1] + delta, 0.01);
   this.update_camera();
-  this.hud('clip width: ' + (this.camera.far - this.camera.near).toFixed(1));
+  this.hud('clip width: ' + (this.camera.far-this.camera.near).toPrecision(3));
 };
 
 Viewer.prototype.change_zoom_by_factor = function (mult) {
   this.camera.zoom *= mult;
   this.update_camera();
-  this.hud('zoom: ' + this.camera.zoom.toFixed(2));
+  this.hud('zoom: ' + this.camera.zoom.toPrecision(3));
 };
 
 Viewer.prototype.change_bond_line = function (delta) {
@@ -3069,8 +3101,9 @@ Viewer.prototype.toggle_cell_box = function () {
       uc = this.map_bags[0].map.unit_cell;
     }
     if (uc) {
-      this.decor.cell_box = makeRgbBox(uc.orthogonalize,
-                                       this.config.colors.cell_box);
+      this.decor.cell_box = makeRgbBox(uc.orthogonalize, {
+        color: this.config.colors.fg,
+      });
       this.scene.add(this.decor.cell_box);
     }
   }
@@ -3080,11 +3113,9 @@ function vec3_to_fixed(vec, n) {
   return [vec.x.toFixed(n), vec.y.toFixed(n), vec.z.toFixed(n)];
 }
 
-Viewer.prototype.shift_clip = function (away) {
-  var eye = this.camera.position.clone().sub(this.target).setLength(1);
-  if (!away) {
-    eye.negate();
-  }
+Viewer.prototype.shift_clip = function (delta) {
+  var eye = this.camera.position.clone().sub(this.target);
+  eye.multiplyScalar(delta / eye.length());
   this.target.add(eye);
   this.camera.position.add(eye);
   this.update_camera();
@@ -3120,47 +3151,54 @@ Viewer.prototype.redraw_all = function () {
   this.redraw_labels();
 };
 
-Viewer.toggle_help = function (el) {
+Viewer.prototype.toggle_help = function (el) {
   if (!el) return;
   el.style.display = el.style.display === 'block' ? 'none' : 'block';
   if (el.innerHTML === '') {
-    el.innerHTML = [
-      '<b>mouse:</b>',
-      'Left = rotate',
-      'Middle or Ctrl+Left = pan',
-      'Right = zoom',
-      'Ctrl+Right = clipping',
-      'Ctrl+Shift+Right = roll',
-      'Wheel = σ level',
-      'Shift+Wheel = diff map σ',
-
-      '\n<b>keyboard:</b>',
-      'H = toggle help',
-      'T = representation',
-      'C = coloring',
-      'B = bg color',
-      'Q = label font',
-      '+/- = sigma level',
-      ']/[ = map radius',
-      'D/F = clip width',
-      'numpad 3/. = move clip',
-      'M/N = zoom',
-      'U = unitcell box',
-      'Y = hydrogens',
-      'R = center view',
-      'W = wireframe style',
-      'I = spin',
-      'K = rock',
-      'Home/End = bond width',
-      '\\ = bond caps',
-      'P = nearest Cα',
-      'Shift+P = permalink',
-      '(Shift+)space = next res.',
-      'Shift+F = full screen',
-
-      '\n<a href="https://uglymol.github.io">about uglymol</a>'].join('\n');
+    el.innerHTML = [this.MOUSE_HELP, this.KEYBOARD_HELP,
+                    this.ABOUT_HELP].join('\n\n');
   }
 };
+
+Viewer.prototype.MOUSE_HELP = [
+  '<b>mouse:</b>',
+  'Left = rotate',
+  'Middle or Ctrl+Left = pan',
+  'Right = zoom',
+  'Ctrl+Right = clipping',
+  'Ctrl+Shift+Right = roll',
+  'Wheel = σ level',
+  'Shift+Wheel = diff map σ',
+].join('\n');
+
+Viewer.prototype.KEYBOARD_HELP = [
+  '<b>keyboard:</b>',
+  'H = toggle help',
+  'T = representation',
+  'C = coloring',
+  'B = bg color',
+  'Q = label font',
+  '+/- = sigma level',
+  ']/[ = map radius',
+  'D/F = clip width',
+  'numpad 3/. = move clip',
+  'M/N = zoom',
+  'U = unitcell box',
+  'Y = hydrogens',
+  'R = center view',
+  'W = wireframe style',
+  'I = spin',
+  'K = rock',
+  'Home/End = bond width',
+  '\\ = bond caps',
+  'P = nearest Cα',
+  'Shift+P = permalink',
+  '(Shift+)space = next res.',
+  'Shift+F = full screen',
+].join('\n');
+
+Viewer.prototype.ABOUT_HELP =
+  '<a href="https://uglymol.github.io">about uglymol</a>';
 
 Viewer.prototype.select_next = function (info, key, options, back) {
   var old_idx = options.indexOf(this.config[key]);
@@ -3176,135 +3214,140 @@ Viewer.prototype.select_next = function (info, key, options, back) {
   this.hud(html, 'HTML');
 };
 
-Viewer.prototype.keydown = function (evt) {  // eslint-disable-line complexity
-  var key = evt.keyCode;
-  if (this.custom_keydown && key in this.custom_keydown) {
-    (this.custom_keydown[key])(evt);
-    this.request_render();
-    return;
-  }
-  switch (key) {
-    case 84:  // t
-      this.select_next('rendering as', 'render_style', RENDER_STYLES,
-                       evt.shiftKey);
-      this.redraw_models();
-      break;
-    case 66:  // b
-      this.select_next('color scheme', 'colors', ColorSchemes, evt.shiftKey);
-      this.set_colors(this.config.colors);
-      break;
-    case 67:  // c
-      this.select_next('coloring by', 'color_aim', COLOR_AIMS, evt.shiftKey);
-      this.redraw_models();
-      break;
-    case 87:  // w
-      this.select_next('map style', 'map_style', MAP_STYLES, evt.shiftKey);
-      this.redraw_maps(true);
-      break;
-    case 89:  // y
-      this.config.hydrogens = !this.config.hydrogens;
-      this.hud((this.config.hydrogens ? 'show' : 'hide') +
-               ' hydrogens (if any)');
-      this.redraw_models();
-      break;
-    case 220:  // \ (backslash)
-      this.select_next('bond lines', 'line_style', LINE_STYLES, evt.shiftKey);
-      this.redraw_models();
-      break;
-    case 107:  // add
-    case 61:  // equals/firefox
-    case 187:  // equal sign
-      this.change_isolevel_by(evt.shiftKey ? 1 : 0, 0.1);
-      break;
-    case 109:  // subtract
-    case 173:  // minus/firefox
-    case 189:  // dash
-      this.change_isolevel_by(evt.shiftKey ? 1 : 0, -0.1);
-      break;
-    case 219:  // [
-      this.change_map_radius(-2);
-      break;
-    case 221:  // ]
-      this.change_map_radius(2);
-      break;
-    case 68:  // d
-      this.change_slab_width_by(-0.1);
-      break;
-    case 70:  // f
-      if (evt.shiftKey) {
-        this.toggle_full_screen();
-      } else {
-        this.change_slab_width_by(0.1);
-      }
-      break;
-    case 77:  // m
-      this.change_zoom_by_factor(evt.shiftKey ? 1.2 : 1.03);
-      break;
-    case 78:  // n
-      this.change_zoom_by_factor(1 / (evt.shiftKey ? 1.2 : 1.03));
-      break;
-    case 80:  // p
-      evt.shiftKey ? this.permalink() : this.go_to_nearest_Ca();
-      break;
-    case 51:  // 3
-    case 99:  // numpad 3
-      this.shift_clip(true);
-      break;
-    case 108:  // numpad period (Linux)
-    case 110:  // decimal point (Mac)
-      this.shift_clip(false);
-      break;
-    case 85:  // u
-      this.hud('toggled unit cell box');
-      this.toggle_cell_box();
-      break;
-    case 73:  // i
-      this.hud('toggled spinning');
-      this.controls.toggle_auto(evt.shiftKey);
-      break;
-    case 75:  // k
-      this.hud('toggled rocking');
-      this.controls.toggle_auto(0.0);
-      break;
-    case 81:  // q
-      this.select_next('label font', 'label_font', LABEL_FONTS, evt.shiftKey);
-      this.redraw_labels();
-      break;
-    case 82:  // r
-      if (evt.shiftKey) {
-        this.hud('redraw!');
-        this.redraw_all();
-      } else {
-        this.hud('model recentered');
-        this.recenter();
-      }
-      break;
-    case 72:  // h
-      Viewer.toggle_help(this.help_el);
-      break;
-    case 36: // Home
-      evt.ctrlKey ? this.change_map_line(0.1) : this.change_bond_line(0.2);
-      break;
-    case 35: // End
-      evt.ctrlKey ? this.change_map_line(-0.1) : this.change_bond_line(-0.2);
-      break;
-    case 16: // shift
-    case 17: // ctrl
-    case 18: // alt
-    case 225: // altgr
-      break;
-    case 32: // Space
-      this.center_next_residue(evt.shiftKey);
-      break;
-    case 191: // slash
-    case 222: // single quote
-      evt.preventDefault();  // disable search bar in Firefox
-      // fallthrough
-    default:
-      if (this.help_el) this.hud('Nothing here. Press H for help.');
-      break;
+Viewer.prototype.keydown = function (evt) {
+  var action = this.key_bindings[evt.keyCode];
+  if (action) {
+    (action.bind(this))(evt);
+  } else {
+    if (action === false) evt.preventDefault();
+    if (this.help_el) this.hud('Nothing here. Press H for help.');
   }
   this.request_render();
+};
+
+Viewer.prototype.set_common_key_bindings = function () {
+  var kb = new Array(256);
+  // Home
+  kb[36] = function (evt) {
+    evt.ctrlKey ? this.change_map_line(0.1) : this.change_bond_line(0.2);
+  };
+  // End
+  kb[35] = function (evt) {
+    evt.ctrlKey ? this.change_map_line(-0.1) : this.change_bond_line(-0.2);
+  };
+  // b
+  kb[66] = function (evt) {
+    this.select_next('color scheme', 'colors', this.ColorSchemes, evt.shiftKey);
+    this.set_colors(this.config.colors);
+  };
+  // c
+  kb[67] = function (evt) {
+    this.select_next('coloring by', 'color_aim', COLOR_AIMS, evt.shiftKey);
+    this.redraw_models();
+  };
+  // d
+  kb[68] = function () { this.change_slab_width_by(-0.1); };
+  // f
+  kb[70] = function (evt) {
+    evt.shiftKey ? this.toggle_full_screen() : this.change_slab_width_by(0.1);
+  };
+  // h
+  kb[72] = function () {
+    this.toggle_help(this.help_el);
+  };
+  // i
+  kb[73] = function (evt) {
+    this.hud('toggled spinning');
+    this.controls.toggle_auto(evt.shiftKey);
+  };
+  // k
+  kb[75] = function () {
+    this.hud('toggled rocking');
+    this.controls.toggle_auto(0.0);
+  };
+  // m
+  kb[77] = function (evt) {
+    this.change_zoom_by_factor(evt.shiftKey ? 1.2 : 1.03);
+  };
+  // n
+  kb[78] = function (evt) {
+    this.change_zoom_by_factor(1 / (evt.shiftKey ? 1.2 : 1.03));
+  };
+  // q
+  kb[81] = function (evt) {
+    this.select_next('label font', 'label_font', LABEL_FONTS, evt.shiftKey);
+    this.redraw_labels();
+  };
+  // r
+  kb[82] = function (evt) {
+    if (evt.shiftKey) {
+      this.hud('redraw!');
+      this.redraw_all();
+    } else {
+      this.hud('recentered');
+      this.recenter();
+    }
+  };
+  // u
+  kb[85] = function () {
+    this.hud('toggled unit cell box');
+    this.toggle_cell_box();
+  };
+  // w
+  kb[87] = function (evt) {
+    this.select_next('map style', 'map_style', MAP_STYLES, evt.shiftKey);
+    this.redraw_maps(true);
+  };
+  // add, equals/firefox, equal sign
+  kb[107] = kb[61] = kb[187] = function (evt) {
+    this.change_isolevel_by(evt.shiftKey ? 1 : 0, 0.1);
+  };
+  // subtract, minus/firefox, dash
+  kb[109] = kb[173] = kb[189] = function (evt) {
+    this.change_isolevel_by(evt.shiftKey ? 1 : 0, -0.1);
+  };
+  // [
+  kb[219] = function () { this.change_map_radius(-2); };
+  // ]
+  kb[221] = function () { this.change_map_radius(2); };
+  // \ (backslash)
+  kb[220] = function (evt) {
+    this.select_next('bond lines', 'line_style', LINE_STYLES, evt.shiftKey);
+    this.redraw_models();
+  };
+  // 3, numpad 3
+  kb[51] = kb[99] = function () { this.shift_clip(1); };
+  // numpad period (Linux), decimal point (Mac)
+  kb[108] = kb[110] = function () { this.shift_clip(-1); };
+  // shift, ctrl, alt, altgr
+  kb[16] = kb[17] = kb[18] = kb[225] = function () {};
+  // slash, single quote
+  kb[191] = kb[222] = false;  // -> preventDefault()
+
+  this.key_bindings = kb;
+};
+
+Viewer.prototype.set_real_space_key_bindings = function () {
+  var kb = this.key_bindings;
+  // Space
+  kb[32] = function (evt) { this.center_next_residue(evt.shiftKey); };
+  // p
+  kb[80] = function (evt) {
+    evt.shiftKey ? this.permalink() : this.go_to_nearest_Ca();
+  };
+  // t
+  kb[84] = function (evt) {
+    this.select_next('rendering as', 'render_style', RENDER_STYLES,
+                     evt.shiftKey);
+    this.redraw_models();
+  };
+  // y
+  kb[89] = function (evt) {
+    this.config.hydrogens = !this.config.hydrogens;
+    this.hud((this.config.hydrogens ? 'show' : 'hide') +
+             ' hydrogens (if any)');
+    this.redraw_models();
+  };
 };
 
 Viewer.prototype.mousedown = function (event) {
@@ -3398,10 +3441,13 @@ Viewer.prototype.mousewheel = function (evt) {
   evt.preventDefault();
   evt.stopPropagation();
   // evt.wheelDelta for WebKit, evt.detail for Firefox
-  var delta = evt.wheelDelta ? evt.wheelDelta / 2000
-                             : (evt.detail || 0) / -1000;
-  this.change_isolevel_by(evt.shiftKey ? 1 : 0, delta);
+  var delta = evt.wheelDelta || -2 * (evt.detail || 0);
+  this.mousewheel_action(delta, evt);
   this.request_render();
+};
+
+Viewer.prototype.mousewheel_action = function (delta, evt) {
+  this.change_isolevel_by(evt.shiftKey ? 1 : 0, 0.0005 * delta);
 };
 
 Viewer.prototype.resize = function (/*evt*/) {
@@ -3463,7 +3509,8 @@ Viewer.prototype.recenter = function (xyz, cam, steps) {
       cam = new THREE.Vector3(cam[0], cam[1], cam[2]);
       new_up = null; // preserve the up direction
     } else {
-      cam = new THREE.Vector3(xyz[0], xyz[1], xyz[2] + 100);
+      var dc = this.default_camera_pos;
+      cam = new THREE.Vector3(xyz[0] + dc[0], xyz[1] + dc[1], xyz[2] + dc[2]);
       new_up = THREE.Object3D.DefaultUp; // Vector3(0, 1, 0)
     }
   }
@@ -3488,25 +3535,12 @@ Viewer.prototype.select_atom = function (atom, options) {
 
 Viewer.prototype.update_camera = function () {
   var dxyz = this.camera.position.distanceTo(this.target);
-  // the far plane is more distant from the target than the near plane (3:1)
-  var w = 0.25 * this.controls.slab_width() / this.camera.zoom;
-  this.camera.near = dxyz * (1 - w);
-  this.camera.far = dxyz * (1 + 3 * w);
+  var w = this.controls.slab_width;
+  var scale = w.length === 3 ? w[2] : this.camera.zoom;
+  this.camera.near = dxyz * (1 - w[0] / scale);
+  this.camera.far = dxyz * (1 + w[1] / scale);
   //this.light.position.copy(this.camera.position);
-  //var h_scale = this.camera.projectionMatrix.elements[5];
   this.camera.updateProjectionMatrix();
-  // temporary hack - scaling balls
-  /*
-  if (h_scale !== this.camera.projectionMatrix.elements[5]) {
-    var ball_size = Math.max(1, 80 * this.camera.projectionMatrix.elements[5]);
-    for (var i = 0; i < this.model_bags.length; i++) {
-      var obj = this.model_bags[i].atomic_objects;
-      if (obj.length === 2 && obj[1].material.size) {
-        obj[1].material.size = ball_size;
-      }
-    }
-  }
-  */
 };
 
 // The main loop. Running when a mouse button is pressed or when the view
@@ -3605,7 +3639,7 @@ Viewer.prototype.load_file = function (url, binary, callback, show_progress) {
 Viewer.prototype.set_view = function (options) {
   var frag = parse_url_fragment();
   if (frag.zoom) this.camera.zoom = frag.zoom;
-  this.recenter(options.center || frag.xyz, frag.eye, 1);
+  this.recenter(frag.xyz || options.center, frag.eye, 1);
 };
 
 // Load molecular model from PDB file and centers the view
@@ -3648,8 +3682,7 @@ Viewer.prototype.load_ccp4_maps = function (url1, url2, callback) {
   }, true);
 };
 
-// Load a model (PDB), normal map and a difference map. One after anotk
-// To show the first map ASAP we do not download both maps in parallel.
+// Load a model (PDB), normal map and a difference map - in this order.
 Viewer.prototype.load_pdb_and_ccp4_maps = function (pdb, map1, map2, callback) {
   var self = this;
   this.load_pdb(pdb, {callback: function () {
@@ -3676,22 +3709,289 @@ Viewer.prototype.show_nav = function (inset_id) {
 };
 */
 
-Viewer.ColorSchemes = ColorSchemes;
+Viewer.prototype.ColorSchemes = ColorSchemes;
 Viewer.auto_speed = auto_speed;
+
+// @flow
+var SPOT_SEL = ['all', 'indexed', 'not indexed'];
+var SHOW_AXES = ['three', 'two', 'none'];
+
+function ReciprocalViewer(options /*: {[key: string]: any}*/) {
+  Viewer.call(this, options);
+  this.default_camera_pos = [100, 0, 0];
+  this.axes = null;
+  this.points = null;
+  this.max_dist = null;
+  this.d_min = null;
+  this.d_max_inv = 0;
+  this.data = null;
+  this.config.show_only = SPOT_SEL[0];
+  this.config.show_axes = SHOW_AXES[0];
+  this.set_reciprocal_key_bindings();
+}
+
+ReciprocalViewer.prototype = Object.create(Viewer.prototype);
+ReciprocalViewer.prototype.constructor = ReciprocalViewer;
+
+ReciprocalViewer.prototype.KEYBOARD_HELP = [
+  '<b>keyboard:</b>',
+  'H = toggle help',
+  'V = show (un)indexed',
+  'A = toggle axes',
+  'B = bg color',
+  'M/N = zoom',
+  'D/F = clip width',
+  'R = center view',
+  'Home/End = point size',
+  'Shift+P = permalink',
+  'Shift+F = full screen',
+  '←/→ = max resol.',
+  '↑/↓ = min resol.',
+].join('\n');
+
+ReciprocalViewer.prototype.MOUSE_HELP = Viewer.prototype.MOUSE_HELP
+                                        .split('\n').slice(0, -2).join('\n');
+
+ReciprocalViewer.prototype.set_reciprocal_key_bindings = function () {
+  var kb = this.key_bindings;
+  // a
+  kb[65] = function (evt) {
+    this.select_next('axes', 'show_axes', SHOW_AXES, evt.shiftKey);
+    this.set_axes();
+  };
+  // p
+  kb[80] = function (evt) { this.permalink(); };
+  // v
+  kb[86] = function (evt) {
+    this.select_next('show', 'show_only', SPOT_SEL, evt.shiftKey);
+    var show_only = this.points.material.uniforms.show_only;
+    var sel_map = { 'all': -2, 'indexed': 0, 'not indexed': -1 };
+    show_only.value = sel_map[this.config.show_only];
+  };
+  // Home
+  kb[36] = function (evt) {
+    evt.ctrlKey ? this.change_map_line(0.1) : this.change_point_size(0.5);
+  };
+  // End
+  kb[35] = function (evt) {
+    evt.ctrlKey ? this.change_map_line(-0.1) : this.change_point_size(-0.5);
+  };
+  // 3, numpad 3
+  kb[51] = kb[99] = function () { this.shift_clip(0.1); };
+  // numpad period (Linux), decimal point (Mac)
+  kb[108] = kb[110] = function () { this.shift_clip(-0.1); };
+  // <-
+  kb[37] = function () { this.change_dmin(0.05); };
+  // ->
+  kb[39] = function () { this.change_dmin(-0.05); };
+  // up arrow
+  kb[38] = function () { this.change_dmax(0.025); };
+  // down arrow
+  kb[40] = function () { this.change_dmax(-0.025); };
+};
+
+ReciprocalViewer.prototype.load_data = function (url, options) {
+  options = options || {};
+  var self = this;
+  this.load_file(url, false, function (req) {
+    self.parse_data(req.responseText);
+    self.set_axes();
+    self.set_points();
+    self.camera.zoom = 0.5 * (self.camera.top - self.camera.bottom);
+    // default scale is set to 100 - same as default_camera_pos
+    var d = 1.01 * self.max_dist;
+    self.controls.slab_width = [d, d, 100];
+    self.set_view(options);
+    if (options.callback) options.callback();
+  });
+};
+
+ReciprocalViewer.prototype.parse_data = function (text) {
+  var lines = text.split('\n').filter(function (line) {
+    return line.length > 0 && line[0] !== '#';
+  });
+  var pos = new Float32Array(lines.length * 3);
+  var lattice_ids = [];
+  var max_sq = 0;
+  for (var i = 0; i < lines.length; i++) {
+    var nums = lines[i].split(',').map(Number);
+    var sq = nums[0]*nums[0] + nums[1]*nums[1] + nums[2]*nums[2];
+    if (sq > max_sq) max_sq = sq;
+    for (var j = 0; j < 3; j++) {
+      pos[3*i+j] = nums[j];
+    }
+    lattice_ids.push(nums[3]);
+  }
+  this.max_dist = Math.sqrt(max_sq);
+  this.d_min = 1 / this.max_dist;
+  this.data = { pos: pos, lattice_ids: lattice_ids };
+};
+
+ReciprocalViewer.prototype.set_axes = function () {
+  if (this.axes != null) {
+    this.remove_and_dispose(this.axes);
+    this.axes = null;
+  }
+  if (this.config.show_axes === 'none') return;
+  var axis_length = 1.2 * this.max_dist;
+  var vertices = [];
+  addXyzCross(vertices, [0, 0, 0], axis_length);
+  var ca = this.config.colors.axes;
+  var colors = [ca[0], ca[0], ca[1], ca[1], ca[2], ca[2]];
+  if (this.config.show_axes === 'two') {
+    vertices.splice(4);
+    colors.splice(4);
+  }
+  var material = makeLineMaterial({
+    win_size: this.window_size,
+    linewidth: 3,
+    segments: true,
+  });
+  this.axes = makeLineSegments(material, vertices, colors);
+  this.scene.add(this.axes);
+};
+
+var point_vert = [
+  'attribute float group;',
+  'uniform float show_only;',
+  'uniform float r2_max;',
+  'uniform float r2_min;',
+  'uniform float size;',
+  'varying vec3 vcolor;',
+  'varying float vsel;',
+  'void main() {',
+  '  vcolor = color;',
+  '  bool sel = show_only == -2.0 || show_only == group;',
+  '  float r2 = dot(position, position);',
+  '  vsel = sel && r2_min <= r2 && r2 < r2_max ? 1.0 : 0.0;',
+  '  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);',
+  '  gl_PointSize = size;',
+  '}'].join('\n');
+
+var point_frag = [
+  'varying vec3 vcolor;',
+  'varying float vsel;',
+  'void main() {',
+  // not sure how reliable is such rounding of points
+  '  vec2 diff = gl_PointCoord - vec2(0.5, 0.5);',
+  '  float dist_sq = 4.0 * dot(diff, diff);',
+  '  if (vsel == 0.0 || dist_sq >= 1.0) discard;',
+  '  gl_FragColor = vec4(vcolor, 1.0 - dist_sq * dist_sq * dist_sq);',
+  '}'].join('\n');
+
+
+ReciprocalViewer.prototype.set_points = function () {
+  if (this.data == null) return;
+  var pos = this.data.pos;
+  var lattice_ids = this.data.lattice_ids;
+  var color_arr = new Float32Array(3 * lattice_ids.length);
+  this.colorize_by_id(color_arr, lattice_ids);
+  var geometry = new THREE.BufferGeometry();
+  geometry.addAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geometry.addAttribute('color', new THREE.BufferAttribute(color_arr, 3));
+  var groups = new Float32Array(lattice_ids);
+  geometry.addAttribute('group', new THREE.BufferAttribute(groups, 1));
+  var material = new THREE.ShaderMaterial({
+    uniforms: {
+      size: { value: 3 },
+      show_only: { value: -2 },
+      r2_max: { value: 100 },
+      r2_min: { value: 0 },
+    },
+    vertexShader: point_vert,
+    fragmentShader: point_frag,
+    vertexColors: THREE.VertexColors,
+  });
+  material.transparent = true;
+  this.points = new THREE.Points(geometry, material);
+  this.scene.add(this.points);
+  this.request_render();
+};
+
+ReciprocalViewer.prototype.colorize_by_id = function (color_arr, group_id) {
+  var palette = this.config.colors.lattices;
+  for (var i = 0; i < group_id.length; i++) {
+    var c = palette[(group_id[i] + 1) % 4];
+    color_arr[3*i] = c.r;
+    color_arr[3*i+1] = c.g;
+    color_arr[3*i+2] = c.b;
+  }
+};
+
+ReciprocalViewer.prototype.redraw_center = function () {};
+
+ReciprocalViewer.prototype.mousewheel_action = function (delta, evt) {
+  this.change_zoom_by_factor(1 + 0.0005 * delta);
+};
+
+ReciprocalViewer.prototype.change_point_size = function (delta) {
+  if (this.points === null) return;
+  var size = this.points.material.uniforms.size;
+  size.value = Math.max(size.value + delta, 0.5);
+  this.hud('point size: ' + size.value.toFixed(1));
+};
+
+ReciprocalViewer.prototype.change_dmin = function (delta) {
+  if (this.d_min == null) return;
+  this.d_min = Math.max(this.d_min + delta, 0.1);
+  var dmax = this.d_max_inv > 0 ? 1 / this.d_max_inv : null;
+  if (dmax !== null && this.d_min > dmax) this.d_min = dmax;
+  this.points.material.uniforms.r2_max.value = 1 / (this.d_min * this.d_min);
+  var low_res = dmax !== null ? dmax.toFixed(2) : '∞';
+  this.hud('res. limit: ' + low_res + ' - ' + this.d_min.toFixed(2) + 'Å');
+};
+
+ReciprocalViewer.prototype.change_dmax = function (delta) {
+  if (this.d_min == null) return;
+  var v = Math.min(this.d_max_inv + delta, 1 / this.d_min);
+  if (v < 1e-6) v = 0;
+  this.d_max_inv = v;
+  this.points.material.uniforms.r2_min.value = v * v;
+  var low_res = v > 0 ? (1 / v).toFixed(2) : '∞';
+  this.hud('res. limit: ' + low_res + ' - ' + this.d_min.toFixed(2) + 'Å');
+};
+
+ReciprocalViewer.prototype.redraw_models = function () {
+  if (this.points) this.remove_and_dispose(this.points);
+  this.set_points();
+};
+
+ReciprocalViewer.prototype.ColorSchemes = [
+  {
+    name: 'solarized dark',
+    bg: 0x002b36,
+    fg: 0xfdf6e3,
+    lattices: [0xdc322f, 0x2aa198, 0x268bd2, 0x859900,
+               0xd33682, 0xb58900, 0x6c71c4, 0xcb4b16],
+    axes: [0xffaaaa, 0xaaffaa, 0xaaaaff],
+  },
+  {
+    name: 'solarized light',
+    bg: 0xfdf6e3,
+    fg: 0x002b36,
+    lattices: [0xdc322f, 0x2aa198, 0x268bd2, 0x859900,
+               0xd33682, 0xb58900, 0x6c71c4, 0xcb4b16],
+    axes: [0xffaaaa, 0xaaffaa, 0xaaaaff],
+  },
+];
 
 exports.UnitCell = UnitCell;
 exports.Model = Model;
 exports.isosurface = isosurface;
 exports.ElMap = ElMap;
-exports.makeCentralCube = makeCentralCube;
+exports.makeCube = makeCube;
 exports.makeRgbBox = makeRgbBox;
 exports.makeRibbon = makeRibbon;
 exports.makeChickenWire = makeChickenWire;
 exports.makeGrid = makeGrid;
-exports.LineFactory = LineFactory;
+exports.makeLineMaterial = makeLineMaterial;
+exports.makeLine = makeLine;
+exports.makeLineSegments = makeLineSegments;
 exports.makeWheels = makeWheels;
 exports.makeLabel = makeLabel;
+exports.addXyzCross = addXyzCross;
 exports.Viewer = Viewer;
+exports.ReciprocalViewer = ReciprocalViewer;
 
 Object.defineProperty(exports, '__esModule', { value: true });
 
