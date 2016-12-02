@@ -13,9 +13,10 @@
 
 exports.VERSION = '0.5.2';
 
-// eslint-disable-next-line max-params
-function UnitCell(a /*:number*/, b /*:number*/, c /*:number*/,
-                  alpha /*:number*/, beta /*:number*/, gamma /*:number*/) {
+// @flow
+
+var UnitCell = function UnitCell(a /*:number*/, b /*:number*/, c /*:number*/,
+            alpha /*:number*/, beta /*:number*/, gamma /*:number*/) {
   if (a <= 0 || b <= 0 || c <= 0 || alpha <= 0 || beta <= 0 || gamma <= 0) {
     throw Error('Zero or negative unit cell parameter(s).');
   }
@@ -30,7 +31,8 @@ function UnitCell(a /*:number*/, b /*:number*/, c /*:number*/,
   if (sin_alpha === 0 || sin_beta === 0 || sin_gamma === 0) {
     throw Error('Impossible angle - N*180deg.');
   }
-  var cos_alpha_star_sin_beta = (cos_beta * cos_gamma - cos_alpha) / sin_gamma;
+  var cos_alpha_star_sin_beta = (cos_beta * cos_gamma - cos_alpha) /
+                                  sin_gamma;
   var cos_alpha_star = cos_alpha_star_sin_beta / sin_beta;
   var s1rca2 = Math.sqrt(1.0 - cos_alpha_star * cos_alpha_star);
   // The orthogonalization matrix we use is described in ITfC B p.262:
@@ -38,12 +40,16 @@ function UnitCell(a /*:number*/, b /*:number*/, c /*:number*/,
   // Data Bank and most programs, is to align the a1 axis of the unit
   // cell with the Cartesian X_1 axis, and to align the a*_3 axis with the
   // Cartesian X_3 axis."
+  //
+  // Zeros in the matrices below are kept to make matrix multiplication
+  // faster: they make extract_block() 2x (!) faster on V8 4.5.103,
+  // no difference on FF 50.
   /* eslint-disable no-multi-spaces, comma-spacing */
-  var orth = [a,   b * cos_gamma,  c * cos_beta,
-              0.0, b * sin_gamma, -c * cos_alpha_star_sin_beta,
-              0.0, 0.0          ,  c * sin_beta * s1rca2];
+  this.orth = [a, b * cos_gamma,c * cos_beta,
+               0.0, b * sin_gamma, -c * cos_alpha_star_sin_beta,
+               0.0, 0.0        ,c * sin_beta * s1rca2];
   // based on xtal.js which is based on cctbx.uctbx
-  var frac = [
+  this.frac = [
     1.0 / a,
     -cos_gamma / (sin_gamma * a),
     -(cos_gamma * cos_alpha_star_sin_beta + cos_beta * sin_gamma) /
@@ -53,52 +59,58 @@ function UnitCell(a /*:number*/, b /*:number*/, c /*:number*/,
     cos_alpha_star / (s1rca2 * sin_gamma * b),
     0.0,
     0.0,
-    1.0 / (sin_beta * s1rca2 * c),
-  ];
+    1.0 / (sin_beta * s1rca2 * c) ];
+};
 
-  function multiply(xyz, mat) {
-    var x = xyz[0], y = xyz[1], z = xyz[2];  // eslint-disable-line
-    return [mat[0] * x + mat[1] * y + mat[2] * z,
-                         mat[4] * y + mat[5] * z,
-                                      mat[8] * z];
-  }
+UnitCell.prototype.fractionalize = function fractionalize (xyz /*:[number,number,number]*/) {
+  return multiply(xyz, this.frac);
+};
 
-  this.fractionalize = function (xyz) { return multiply(xyz, frac); };
-  this.orthogonalize = function (xyz) { return multiply(xyz, orth); };
+UnitCell.prototype.orthogonalize = function orthogonalize (xyz /*:[number,number,number]*/) {
+  return multiply(xyz, this.orth);
+};
+
+// This function is only used with matrices frac and orth, which have 3 zeros.
+// We skip these elements, but it doesn't affect performance (on FF50 and V8).
+function multiply(xyz, mat) {
+  return [mat[0] * xyz[0]  + mat[1] * xyz[1]  + mat[2] * xyz[2],
+        /*mat[3] * xyz[0]*/+ mat[4] * xyz[1]  + mat[5] * xyz[2],
+        /*mat[6] * xyz[0]  + mat[7] * xyz[1]*/+ mat[8] * xyz[2]];
 }
 
 // @flow
 
 var AMINO_ACIDS = [
   'ALA', 'ARG', 'ASN', 'ASP', 'CYS', 'GLN', 'GLU', 'GLY', 'HIS', 'ILE', 'LEU',
-  'LYS', 'MET', 'MSE', 'PHE', 'PRO', 'SER', 'THR', 'TRP', 'TYR', 'VAL', 'UNK',
-];
+  'LYS', 'MET', 'MSE', 'PHE', 'PRO', 'SER', 'THR', 'TRP', 'TYR', 'VAL', 'UNK' ];
 var NUCLEIC_ACIDS = [
   'DA', 'DC', 'DG', 'DT', 'A', 'C', 'G', 'U', 'rA', 'rC', 'rG', 'rU',
-  'Ar', 'Cr', 'Gr', 'Ur',
-];
+  'Ar', 'Cr', 'Gr', 'Ur' ];
 
 var NOT_LIGANDS = ['HOH'].concat(AMINO_ACIDS, NUCLEIC_ACIDS);
 
-function Model() {
+var Model = function Model() {
   this.atoms = [];
   this.unit_cell = null;
   this.space_group = null;
   this.has_hydrogens = false;
-  this.lower_bound = null;
-  this.upper_bound = null;
-}
+  this.lower_bound = [0, 0, 0];
+  this.upper_bound = [0, 0, 0];
+  this.residue_map = null;
+  this.cubes = null;
+};
 
-Model.prototype.from_pdb = function (pdb_string) {
+Model.prototype.from_pdb = function from_pdb (pdb_string /*:string*/) {
   var lines = pdb_string.split('\n');
-  var chain_index = 0;  // will be ++'ed for the first atom
+  var chain_index = 0;// will be ++'ed for the first atom
   var last_chain = null;
   var atom_i_seq = 0;
   //var last_atom = null;
   for (var i = 0; i < lines.length; i++) {
     var line = lines[i];
     var rec_type = line.substring(0, 6);
-    if (rec_type === 'ATOM  ' || rec_type === 'HETATM') {
+    //+ is temporary: https://gitlab.com/Rich-Harris/buble/issues/159
+    if (rec_type === 'ATOM '+' ' || rec_type === 'HETATM') {
       var new_atom = new Atom();
       new_atom.from_pdb_line(line);
       new_atom.i_seq = atom_i_seq++;
@@ -134,15 +146,15 @@ Model.prototype.from_pdb = function (pdb_string) {
   this.calculate_connectivity();
 };
 
-Model.prototype.calculate_bounds = function () {
+Model.prototype.calculate_bounds = function calculate_bounds () {
   var lower = this.lower_bound = [Infinity, Infinity, Infinity];
   var upper = this.upper_bound = [-Infinity, -Infinity, -Infinity];
   for (var i = 0; i < this.atoms.length; i++) {
     var atom = this.atoms[i];
     for (var j = 0; j < 3; j++) {
       var v = atom.xyz[j];
-      if (v < lower[j]) lower[j] = v;
-      if (v > upper[j]) upper[j] = v;
+      if (v < lower[j]) { lower[j] = v; }
+      if (v > upper[j]) { upper[j] = v; }
     }
   }
   // with a margin
@@ -152,26 +164,26 @@ Model.prototype.calculate_bounds = function () {
   }
 };
 
-Model.prototype.next_residue = function (atom, backward) {
+Model.prototype.next_residue = function next_residue (atom /*:?Atom*/, backward /*:?boolean*/) {
   var len = this.atoms.length;
-  var start = (atom ? atom.i_seq : 0) + len;  // +len to avoid idx<0 below
+  var start = (atom ? atom.i_seq : 0) + len;// +len to avoid idx<0 below
   for (var i = (atom ? 1 : 0); i < len; i++) {
     var idx = (start + (backward ? -i : i)) % len;
     var a = this.atoms[idx];
-    if (!a.is_main_conformer()) continue;
+    if (!a.is_main_conformer()) { continue; }
     if ((a.name === 'CA' && a.element === 'C') || a.name === 'P') {
       return a;
     }
   }
 };
 
-Model.prototype.extract_trace = function () {
+Model.prototype.extract_trace = function extract_trace () {
   var segments = [];
   var current_segment = [];
   var last_atom = null;
   for (var i = 0; i < this.atoms.length; i++) {
     var atom = this.atoms[i];
-    if (atom.altloc !== '' && atom.altloc !== 'A') continue;
+    if (atom.altloc !== '' && atom.altloc !== 'A') { continue; }
     if ((atom.name === 'CA' && atom.element === 'C') || atom.name === 'P') {
       var start_new = true;
       if (last_atom !== null && last_atom.chain_index === atom.chain_index) {
@@ -198,8 +210,8 @@ Model.prototype.extract_trace = function () {
   return segments;
 };
 
-Model.prototype.get_residues = function () {
-  if (this.residue_map != null) return this.residue_map;
+Model.prototype.get_residues = function get_residues () {
+  if (this.residue_map != null) { return this.residue_map; }
   var residues = {};
   for (var i = 0; i < this.atoms.length; i++) {
     var atom = this.atoms[i];
@@ -216,7 +228,7 @@ Model.prototype.get_residues = function () {
 };
 
 // tangent vector to the ribbon representation
-Model.prototype.calculate_tangent_vector = function (residue) {
+Model.prototype.calculate_tangent_vector = function calculate_tangent_vector (residue /*:Atom[]*/) {
   var a1 = null;
   var a2 = null;
   // it may be too simplistic
@@ -225,21 +237,21 @@ Model.prototype.calculate_tangent_vector = function (residue) {
   var name2 = peptide ? 'O' : 'O4\'';
   for (var i = 0; i < residue.length; i++) {
     var atom = residue[i];
-    if (!atom.is_main_conformer()) continue;
+    if (!atom.is_main_conformer()) { continue; }
     if (atom.name === name1) {
       a1 = atom.xyz;
     } else if (atom.name === name2) {
       a2 = atom.xyz;
     }
   }
-  if (a1 === null || a2 === null) return [0, 0, 1]; // arbitrary value
+  if (a1 === null || a2 === null) { return [0, 0, 1]; } // arbitrary value
   var d = [a1[0]-a2[0], a1[1]-a2[1], a1[2]-a2[2]];
   var len = Math.sqrt(d[0]*d[0] + d[1]*d[1] + d[2]*d[2]);
   return [d[0]/len, d[1]/len, d[2]/len];
 };
 
-Model.prototype.get_center = function () {
-  var xsum = 0, ysum = 0, zsum = 0;  // eslint-disable-line
+Model.prototype.get_center = function get_center () {
+  var xsum = 0, ysum = 0, zsum = 0;// eslint-disable-line
   var n_atoms = this.atoms.length;
   for (var i = 0; i < n_atoms; i++) {
     var xyz = this.atoms[i].xyz;
@@ -250,210 +262,13 @@ Model.prototype.get_center = function () {
   return [xsum / n_atoms, ysum / n_atoms, zsum / n_atoms];
 };
 
-
-// Single atom and associated labels
-function Atom() {
-  this.hetero = false;
-  this.name = '';
-  this.altloc = '';
-  this.resname = '';
-  this.chain = '';
-  this.chain_index = null;
-  this.resseq = null;
-  this.icode = null;
-  this.xyz = [0, 0, 0];
-  this.occ = 1.0;
-  this.b = 0;
-  this.element = '';
-  this.charge = 0;
-  this.i_seq = null;
-  this.is_ligand = null;
-  this.bonds = [];
-}
-
-// http://www.wwpdb.org/documentation/format33/sect9.html#ATOM
-Atom.prototype.from_pdb_line = function (pdb_line) {
-  if (pdb_line.length < 66) {
-    throw Error('ATOM or HETATM record is too short: ' + pdb_line);
-  }
-  var rec_type = pdb_line.substring(0, 6);
-  if (rec_type === 'HETATM') {
-    this.hetero = true;
-  } else if (rec_type !== 'ATOM  ') {
-    throw Error('Wrong record type: ' + rec_type);
-  }
-  this.name = pdb_line.substring(12, 16).trim();
-  this.altloc = pdb_line.substring(16, 17).trim();
-  this.resname = pdb_line.substring(17, 20).trim();
-  this.chain = pdb_line.substring(20, 22).trim();
-  this.resseq = parseInt(pdb_line.substring(22, 26), 10);
-  this.icode = pdb_line.substring(26, 27).trim();
-  var x = parseFloat(pdb_line.substring(30, 38));
-  var y = parseFloat(pdb_line.substring(38, 46));
-  var z = parseFloat(pdb_line.substring(46, 54));
-  this.xyz = [x, y, z];
-  this.occ = parseFloat(pdb_line.substring(54, 60));
-  this.b = parseFloat(pdb_line.substring(60, 66));
-  if (pdb_line.length >= 78) {
-    this.element = pdb_line.substring(76, 78).trim().toUpperCase();
-  }
-  if (pdb_line.length >= 80) {
-    this.charge = pdb_line.substring(78, 80).trim();
-  }
-  this.is_ligand = (NOT_LIGANDS.indexOf(this.resname) === -1);
-};
-
-Atom.prototype.b_as_u = function () {
-  // B = 8 * pi^2 * u^2
-  return Math.sqrt(this.b / (8 * 3.14159 * 3.14159));
-};
-
-Atom.prototype.distance_sq = function (other) {
-  var dx = this.xyz[0] - other.xyz[0];
-  var dy = this.xyz[1] - other.xyz[1];
-  var dz = this.xyz[2] - other.xyz[2];
-  return dx*dx + dy*dy + dz*dz;
-};
-
-Atom.prototype.distance = function (other) {
-  return Math.sqrt(this.distance_sq(other));
-};
-
-Atom.prototype.midpoint = function (other) {
-  return [(this.xyz[0] + other.xyz[0]) / 2,
-          (this.xyz[1] + other.xyz[1]) / 2,
-          (this.xyz[2] + other.xyz[2]) / 2];
-};
-
-Atom.prototype.is_hydrogen = function () {
-  return this.element === 'H' || this.element === 'D';
-};
-
-Atom.prototype.is_s_or_p = function () {
-  return this.element === 'S' || this.element === 'P';
-};
-
-Atom.prototype.is_ion = function () {
-  return this.element === this.resname;
-};
-
-Atom.prototype.is_water = function () {
-  return this.resname === 'HOH';
-};
-
-Atom.prototype.is_same_residue = function (other, ignore_altloc) {
-  return other.resseq === this.resseq && other.icode === this.icode &&
-         other.chain === this.chain && other.resname === this.resname &&
-         (ignore_altloc || other.altloc === this.altloc);
-};
-
-Atom.prototype.is_same_conformer = function (other) {
-  return this.altloc === '' || other.altloc === '' ||
-         this.altloc === other.altloc;
-};
-
-Atom.prototype.is_main_conformer = function () {
-  return this.altloc === '' || this.altloc === 'A';
-};
-
-Atom.prototype.is_bonded_to = function (other) {
-  /** @const */ var MAX_DIST_SQ = 1.99 * 1.99;
-  /** @const */ var MAX_DIST_H_SQ = 1.3 * 1.3;
-  /** @const */ var MAX_DIST_SP_SQ = 2.2 * 2.2;
-
-  if (!this.is_same_conformer(other)) return false;
-  if (this.element === 'H' && other.element === 'H') return false;
-  var dxyz2 = this.distance_sq(other);
-  if (dxyz2 > MAX_DIST_SP_SQ) return false;
-  if (this.element === 'H' || other.element === 'H') {
-    return dxyz2 <= MAX_DIST_H_SQ;
-  }
-  return dxyz2 <= MAX_DIST_SQ || this.is_s_or_p() || other.is_s_or_p();
-};
-
-Atom.prototype.resid = function () {
-  return this.resseq + '/' + this.chain;
-};
-
-Atom.prototype.long_label = function () {
-  var a = this;
-  return a.name + ' /' + a.resseq + ' ' + a.resname + '/' + a.chain +
-         ' - occ: ' + a.occ.toFixed(2) + ' bf: ' + a.b.toFixed(2) +
-         ' ele: ' + a.element + ' pos: (' + a.xyz[0].toFixed(2) + ',' +
-         a.xyz[1].toFixed(2) + ',' + a.xyz[2].toFixed(2) + ')';
-};
-
-Atom.prototype.short_label = function () {
-  var a = this;
-  return a.name + ' /' + a.resseq + ' ' + a.resname + '/' + a.chain;
-};
-
-// Partition atoms into boxes for quick neighbor searching.
-function Cubicles(atoms, box_length, lower_bound, upper_bound) {
-  var i;
-  this.boxes = [];
-  this.xdim = Math.ceil((upper_bound[0] - lower_bound[0]) / box_length);
-  this.ydim = Math.ceil((upper_bound[1] - lower_bound[1]) / box_length);
-  this.zdim = Math.ceil((upper_bound[2] - lower_bound[2]) / box_length);
-  //console.log("Cubicles: " + this.xdim + "x" + this.ydim + "x" + this.zdim);
-  var nxyz = this.xdim * this.ydim * this.zdim;
-  for (i = 0; i < nxyz; i++) {
-    this.boxes.push([]);
-  }
-
-  this.find_box_id = function (x, y, z) {
-    var xstep = Math.floor((x - lower_bound[0]) / box_length);
-    var ystep = Math.floor((y - lower_bound[1]) / box_length);
-    var zstep = Math.floor((z - lower_bound[2]) / box_length);
-    var box_id = (zstep * this.ydim + ystep) * this.xdim + xstep;
-    return (box_id >= 0 && box_id < this.boxes.length) ? box_id : null;
-  };
-
-  for (i = 0; i < atoms.length; i++) {
-    var xyz = atoms[i].xyz;
-    var box_id = this.find_box_id(xyz[0], xyz[1], xyz[2]);
-    if (box_id === null) {
-      throw Error('wrong cubicle');
-    }
-    this.boxes[box_id].push(i);
-  }
-}
-
-Cubicles.prototype.get_nearby_atoms = function (box_id) {
-  var indices = [];
-  var xydim = this.xdim * this.ydim;
-  var uv = Math.max(box_id % xydim, 0);
-  var u = Math.max(uv % this.xdim, 0);
-  var v = Math.floor(uv / this.xdim);
-  var w = Math.floor(box_id / xydim);
-  console.assert((w * xydim) + (v * this.xdim) + u === box_id);
-  for (var iu = u-1; iu <= u+1; iu++) {
-    if (iu < 0 || iu >= this.xdim) continue;
-    for (var iv = v-1; iv <= v+1; iv++) {
-      if (iv < 0 || iv >= this.ydim) continue;
-      for (var iw = w-1; iw <= w+1; iw++) {
-        if (iw < 0 || iw >= this.zdim) continue;
-        var other_box_id = (iw * xydim) + (iv * this.xdim) + iu;
-        if (other_box_id >= this.boxes.length || other_box_id < 0) {
-          throw Error('Box out of bounds: ID ' + other_box_id);
-        }
-        var box = this.boxes[other_box_id];
-        for (var i = 0; i < box.length; i++) {
-          indices.push(box[i]);
-        }
-      }
-    }
-  }
-  return indices;
-};
-
-Model.prototype.calculate_connectivity = function () {
+Model.prototype.calculate_connectivity = function calculate_connectivity () {
   var atoms = this.atoms;
   var cubes = new Cubicles(atoms, 3.0, this.lower_bound, this.upper_bound);
-  //var cnt = 0;
+  //let cnt = 0;
   for (var i = 0; i < cubes.boxes.length; i++) {
     var box = cubes.boxes[i];
-    if (box.length === 0) continue;
+    if (box.length === 0) { continue; }
     var nearby_atoms = cubes.get_nearby_atoms(i);
     for (var a = 0; a < box.length; a++) {
       var atom_id = box[a];
@@ -471,15 +286,18 @@ Model.prototype.calculate_connectivity = function () {
   this.cubes = cubes;
 };
 
-Model.prototype.get_nearest_atom = function (x, y, z, atom_name) {
-  var box_id = this.cubes.find_box_id(x, y, z);
-  var indices = this.cubes.get_nearby_atoms(box_id);
+Model.prototype.get_nearest_atom = function get_nearest_atom (x /*:number*/, y /*:number*/, z /*:number*/,
+                 atom_name /*:string*/) {
+  var cubes = this.cubes;
+  if (cubes == null) { throw Error('Missing Cubicles'); }
+  var box_id = cubes.find_box_id(x, y, z);
+  var indices = cubes.get_nearby_atoms(box_id);
   var nearest = null;
   var min_d2 = Infinity;
   for (var i = 0; i < indices.length; i++) {
     var atom = this.atoms[indices[i]];
     if (atom_name !== undefined && atom_name !== null &&
-        atom_name !== atom.name) continue;
+        atom_name !== atom.name) { continue; }
     var dx = atom.xyz[0] - x;
     var dy = atom.xyz[1] - y;
     var dz = atom.xyz[2] - z;
@@ -492,7 +310,243 @@ Model.prototype.get_nearest_atom = function (x, y, z, atom_name) {
   return nearest;
 };
 
+// Single atom and associated labels
+var Atom = function Atom() {
+  this.hetero = false;
+  this.name = '';
+  this.altloc = '';
+  this.resname = '';
+  this.chain = '';
+  this.chain_index = null;
+  this.resseq = -1;
+  this.icode = null;
+  this.xyz = [0, 0, 0];
+  this.occ = 1.0;
+  this.b = 0;
+  this.element = '';
+  this.i_seq = null;
+  this.is_ligand = null;
+  this.bonds = [];
+};
+
+// http://www.wwpdb.org/documentation/format33/sect9.html#ATOM
+Atom.prototype.from_pdb_line = function from_pdb_line (pdb_line /*:string*/) {
+  if (pdb_line.length < 66) {
+    throw Error('ATOM or HETATM record is too short: ' + pdb_line);
+  }
+  var rec_type = pdb_line.substring(0, 6);
+  if (rec_type === 'HETATM') {
+    this.hetero = true;
+  } else if (rec_type !== 'ATOM '+' ') {
+    throw Error('Wrong record type: ' + rec_type);
+  }
+  this.name = pdb_line.substring(12, 16).trim();
+  this.altloc = pdb_line.substring(16, 17).trim();
+  this.resname = pdb_line.substring(17, 20).trim();
+  this.chain = pdb_line.substring(20, 22).trim();
+  this.resseq = parseInt(pdb_line.substring(22, 26), 10);
+  this.icode = pdb_line.substring(26, 27).trim();
+  var x = parseFloat(pdb_line.substring(30, 38));
+  var y = parseFloat(pdb_line.substring(38, 46));
+  var z = parseFloat(pdb_line.substring(46, 54));
+  this.xyz = [x, y, z];
+  this.occ = parseFloat(pdb_line.substring(54, 60));
+  this.b = parseFloat(pdb_line.substring(60, 66));
+  if (pdb_line.length >= 78) {
+    this.element = pdb_line.substring(76, 78).trim().toUpperCase();
+  }
+  //if (pdb_line.length >= 80) {
+  //this.charge = pdb_line.substring(78, 80).trim();
+  //}
+  this.is_ligand = (NOT_LIGANDS.indexOf(this.resname) === -1);
+};
+
+Atom.prototype.b_as_u = function b_as_u () {
+  // B = 8 * pi^2 * u^2
+  return Math.sqrt(this.b / (8 * 3.14159 * 3.14159));
+};
+
+Atom.prototype.distance_sq = function distance_sq (other /*:Atom*/) {
+  var dx = this.xyz[0] - other.xyz[0];
+  var dy = this.xyz[1] - other.xyz[1];
+  var dz = this.xyz[2] - other.xyz[2];
+  return dx*dx + dy*dy + dz*dz;
+};
+
+Atom.prototype.distance = function distance (other /*:Atom*/) {
+  return Math.sqrt(this.distance_sq(other));
+};
+
+Atom.prototype.midpoint = function midpoint (other /*:Atom*/) {
+  return [(this.xyz[0] + other.xyz[0]) / 2,
+          (this.xyz[1] + other.xyz[1]) / 2,
+          (this.xyz[2] + other.xyz[2]) / 2];
+};
+
+Atom.prototype.is_hydrogen = function is_hydrogen () {
+  return this.element === 'H' || this.element === 'D';
+};
+
+Atom.prototype.is_s_or_p = function is_s_or_p () {
+  return this.element === 'S' || this.element === 'P';
+};
+
+Atom.prototype.is_ion = function is_ion () {
+  return this.element === this.resname;
+};
+
+Atom.prototype.is_water = function is_water () {
+  return this.resname === 'HOH';
+};
+
+Atom.prototype.is_same_residue = function is_same_residue (other /*:Atom*/, ignore_altloc /*:?boolean*/) {
+  return other.resseq === this.resseq && other.icode === this.icode &&
+         other.chain === this.chain && other.resname === this.resname &&
+         (ignore_altloc || other.altloc === this.altloc);
+};
+
+Atom.prototype.is_same_conformer = function is_same_conformer (other /*:Atom*/) {
+  return this.altloc === '' || other.altloc === '' ||
+         this.altloc === other.altloc;
+};
+
+Atom.prototype.is_main_conformer = function is_main_conformer () {
+  return this.altloc === '' || this.altloc === 'A';
+};
+
+Atom.prototype.is_bonded_to = function is_bonded_to (other /*:Atom*/) {
+  var MAX_DIST_SQ = 1.99 * 1.99;
+  var MAX_DIST_H_SQ = 1.3 * 1.3;
+  var MAX_DIST_SP_SQ = 2.2 * 2.2;
+
+  if (!this.is_same_conformer(other)) { return false; }
+  if (this.element === 'H' && other.element === 'H') { return false; }
+  var dxyz2 = this.distance_sq(other);
+  if (dxyz2 > MAX_DIST_SP_SQ) { return false; }
+  if (this.element === 'H' || other.element === 'H') {
+    return dxyz2 <= MAX_DIST_H_SQ;
+  }
+  return dxyz2 <= MAX_DIST_SQ || this.is_s_or_p() || other.is_s_or_p();
+};
+
+Atom.prototype.resid = function resid () {
+  return this.resseq + '/' + this.chain;
+};
+
+Atom.prototype.long_label = function long_label () {
+  var a = this;
+  return a.name + ' /' + a.resseq + ' ' + a.resname + '/' + a.chain +
+         ' - occ: ' + a.occ.toFixed(2) + ' bf: ' + a.b.toFixed(2) +
+         ' ele: ' + a.element + ' pos: (' + a.xyz[0].toFixed(2) + ',' +
+         a.xyz[1].toFixed(2) + ',' + a.xyz[2].toFixed(2) + ')';
+};
+
+Atom.prototype.short_label = function short_label () {
+  var a = this;
+  return a.name + ' /' + a.resseq + ' ' + a.resname + '/' + a.chain;
+};
+
+
+// Partition atoms into boxes for quick neighbor searching.
+var Cubicles = function Cubicles(atoms, box_length, lower_bound, upper_bound) {
+  this.boxes = [];
+  this.box_length = box_length;
+  this.lower_bound = lower_bound;
+  this.upper_bound = upper_bound;
+  this.xdim = Math.ceil((upper_bound[0] - lower_bound[0]) / box_length);
+  this.ydim = Math.ceil((upper_bound[1] - lower_bound[1]) / box_length);
+  this.zdim = Math.ceil((upper_bound[2] - lower_bound[2]) / box_length);
+  //console.log("Cubicles: " + this.xdim + "x" + this.ydim + "x" + this.zdim);
+  var nxyz = this.xdim * this.ydim * this.zdim;
+  for (var j = 0; j < nxyz; j++) {
+    this.boxes.push([]);
+  }
+  for (var i = 0; i < atoms.length; i++) {
+    var xyz = atoms[i].xyz;
+    var box_id = this.find_box_id(xyz[0], xyz[1], xyz[2]);
+    if (box_id === null) {
+      throw Error('wrong cubicle');
+    }
+    this.boxes[box_id].push(i);
+  }
+};
+
+Cubicles.prototype.find_box_id = function find_box_id (x, y, z) {
+  var xstep = Math.floor((x - this.lower_bound[0]) / this.box_length);
+  var ystep = Math.floor((y - this.lower_bound[1]) / this.box_length);
+  var zstep = Math.floor((z - this.lower_bound[2]) / this.box_length);
+  var box_id = (zstep * this.ydim + ystep) * this.xdim + xstep;
+  if (box_id < 0 || box_id >= this.boxes.length) { throw Error('Ups!'); }
+  return box_id;
+};
+
+Cubicles.prototype.get_nearby_atoms = function get_nearby_atoms (box_id) {
+  var indices = [];
+  var xydim = this.xdim * this.ydim;
+  var uv = Math.max(box_id % xydim, 0);
+  var u = Math.max(uv % this.xdim, 0);
+  var v = Math.floor(uv / this.xdim);
+  var w = Math.floor(box_id / xydim);
+  console.assert((w * xydim) + (v * this.xdim) + u === box_id);
+  for (var iu = u-1; iu <= u+1; iu++) {
+    if (iu < 0 || iu >= this.xdim) { continue; }
+    for (var iv = v-1; iv <= v+1; iv++) {
+      if (iv < 0 || iv >= this.ydim) { continue; }
+      for (var iw = w-1; iw <= w+1; iw++) {
+        if (iw < 0 || iw >= this.zdim) { continue; }
+        var other_box_id = (iw * xydim) + (iv * this.xdim) + iu;
+        if (other_box_id >= this.boxes.length || other_box_id < 0) {
+          throw Error('Box out of bounds: ID ' + other_box_id);
+        }
+        var box = this.boxes[other_box_id];
+        for (var i = 0; i < box.length; i++) {
+          indices.push(box[i]);
+        }
+      }
+    }
+  }
+  return indices;
+};
+
 // @flow
+/*:: type Num3 = [number, number, number] */
+
+var Block = function Block() {
+  this._points = null;
+  this._values = null;
+  this._size = [0, 0, 0];
+};
+
+Block.prototype.set = function set (points /*:Num3[]*/, values/*:number[]*/, size/*:Num3*/) {
+  if (size[0] <= 0 || size[1] <= 0 || size[2] <= 0) {
+    throw Error('Grid dimensions are zero along at least one edge');
+  }
+  var len = size[0] * size[1] * size[2];
+  if (values.length !== len || points.length !== len) {
+    throw Error('isosurface: array size mismatch');
+  }
+
+  this._points = points;
+  this._values = values;
+  this._size = size;
+};
+
+Block.prototype.clear = function clear () {
+  this._points = null;
+  this._values = null;
+};
+
+Block.prototype.empty = function empty () /*:boolean*/ {
+  return this._values === null;
+};
+
+Block.prototype.isosurface = function isosurface (isolevel /*: number*/, method /*: string*/) {
+  //if (method === 'marching tetrahedra') {
+  //return marchingTetrahedra(block, isolevel);
+  //}
+  return marchingCubes(this._size, this._values, this._points,
+                       isolevel, method);
+};
 
 /* eslint comma-spacing: 0, no-multi-spaces: 0 */
 
@@ -1049,23 +1103,13 @@ var segTable2 = [
   []];
 
 var cubeVerts = [[0,0,0], [1,0,0], [1,1,0], [0,1,0],
-                 [0,0,1], [1,0,1], [1,1,1], [0,1,1]];
+                   [0,0,1], [1,0,1], [1,1,1], [0,1,1]];
 var edgeIndex = [[0,1], [1,2], [2,3], [3,0], [4,5], [5,6],
-                 [6,7], [7,4], [0,4], [1,5], [2,6], [3,7]];
+                   [6,7], [7,4], [0,4], [1,5], [2,6], [3,7]];
 // edge directions: [x, y, -x, -y, x, y, -x, -y, z, z, z, z]
 
-function check_input(dims, values, points) {
-  if (dims[0] <= 0 || dims[1] <= 0 || dims[2] <= 0) {
-    throw Error('Grid dimensions are zero along at least one edge');
-  }
-  var size_xyz = dims[0] * dims[1] * dims[2];
-  if (values.length !== size_xyz || points.length !== size_xyz) {
-    throw Error('isosurface: array size mismatch');
-  }
-}
-
 // return offsets relative to vertex [0,0,0]
-function calculate_vert_offsets(dims) {
+function calculateVertOffsets(dims) {
   var vert_offsets = [];
   for (var i = 0; i < 8; ++i) {
     var v = cubeVerts[i];
@@ -1075,17 +1119,18 @@ function calculate_vert_offsets(dims) {
 }
 
 
-function marching_cubes(dims, values, points, isolevel, method) {
+function marchingCubes(dims, values, points, isolevel, method) {
   var snap = (method === 'snapped MC');
   var seg_table = (method === 'squarish' ? segTable2 : segTable);
   var vlist = new Array(12);
-  var vert_offsets = calculate_vert_offsets(dims);
+  var vert_offsets = calculateVertOffsets(dims);
   var vertex_values = new Float32Array(8);
   var p0 = [0, 0, 0]; // initial value - never used, but makes Flow happy
   var vertex_points = [p0, p0, p0, p0, p0, p0, p0, p0];
   var size_x = dims[0];
   var size_y = dims[1];
   var size_z = dims[2];
+  if (values == null || points == null) { return; }
   var vertices = [];
   var segments = [];
   var vertex_count = 0;
@@ -1094,13 +1139,13 @@ function marching_cubes(dims, values, points, isolevel, method) {
       for (var z = 0; z < size_z - 1; z++) {
         var offset0 = z + size_z * (y + size_y * x);
         var cubeindex = 0;
-        var i;
-        var j;
+        var i = (void 0);
+        var j = (void 0);
         for (i = 0; i < 8; ++i) {
           j = offset0 + vert_offsets[i];
           cubeindex |= (values[j] < isolevel) ? 1 << i : 0;
         }
-        if (cubeindex === 0 || cubeindex === 255) continue;
+        if (cubeindex === 0 || cubeindex === 255) { continue; }
         for (i = 0; i < 8; ++i) {
           j = offset0 + vert_offsets[i];
           vertex_values[i] = values[j];
@@ -1118,8 +1163,8 @@ function marching_cubes(dims, values, points, isolevel, method) {
             var mu = (isolevel - vertex_values[e[0]]) /
                      (vertex_values[e[1]] - vertex_values[e[0]]);
             if (snap === true) {
-              if (mu > 0.85) mu = 1;
-              else if (mu < 0.15) mu = 0;
+              if (mu > 0.85) { mu = 1; }
+              else if (mu < 0.15) { mu = 0; }
             }
             var p1 = vertex_points[e[0]];
             var p2 = vertex_points[e[1]];
@@ -1143,43 +1188,31 @@ function marching_cubes(dims, values, points, isolevel, method) {
   return { vertices: vertices, segments: segments };
 }
 
-function isosurface(dims /*: [number, number, number]*/,
-                           values /*: number[]*/,
-                           points /*: Array<[number, number, number]>*/,
-                           isolevel /*: number*/,
-                           method /*: string*/) {
-  check_input(dims, values, points);
-  //if (method === 'marching tetrahedra') {
-  //  return marching_tetrahedra(dims, values, points, isolevel);
-  //}
-  return marching_cubes(dims, values, points, isolevel, method);
-}
-
 // @flow
-
-function GridArray(dim) {
-  this.dim = dim; // dimensions of the grid for the entire unit cell
-  this.values = new Float32Array(dim[0] * dim[1] * dim[2]);
-}
 
 function modulo(a, b) {
   var reminder = a % b;
   return reminder >= 0 ? reminder : reminder + b;
 }
 
-GridArray.prototype.grid2index = function (i, j, k) {
+var GridArray = function GridArray(dim) {
+  this.dim = dim; // dimensions of the grid for the entire unit cell
+  this.values = new Float32Array(dim[0] * dim[1] * dim[2]);
+};
+
+GridArray.prototype.grid2index = function grid2index (i, j, k) {
   i = modulo(i, this.dim[0]);
   j = modulo(j, this.dim[1]);
   k = modulo(k, this.dim[2]);
   return this.dim[2] * (this.dim[1] * i + j) + k;
 };
 
-GridArray.prototype.grid2frac = function (i, j, k) {
+GridArray.prototype.grid2frac = function grid2frac (i, j, k) {
   return [i / this.dim[0], j / this.dim[1], k / this.dim[2]];
 };
 
 // return grid coordinates (rounded down) for the given fractional coordinates
-GridArray.prototype.frac2grid = function (xyz) {
+GridArray.prototype.frac2grid = function frac2grid (xyz) {
   // at one point "| 0" here made extract_block() 40% faster on V8 3.14,
   // but I don't see any effect now
   return [Math.floor(xyz[0] * this.dim[0]) | 0,
@@ -1187,24 +1220,17 @@ GridArray.prototype.frac2grid = function (xyz) {
           Math.floor(xyz[2] * this.dim[2]) | 0];
 };
 
-GridArray.prototype.set_grid_value = function (i, j, k, value) {
+GridArray.prototype.set_grid_value = function set_grid_value (i, j, k, value) {
   var idx = this.grid2index(i, j, k);
   this.values[idx] = value;
 };
 
-GridArray.prototype.get_grid_value = function (i, j, k) {
+GridArray.prototype.get_grid_value = function get_grid_value (i, j, k) {
   var idx = this.grid2index(i, j, k);
   return this.values[idx];
 };
 
-function ElMap() {
-  this.unit_cell = null;
-  this.grid = null;
-  this.mean = 0.0;
-  this.rms = 1.0;
-}
-
-ElMap.prototype.calculate_stddev = function (a, offset) {
+function calculate_stddev(a, offset) {
   var sum = 0;
   var sq_sum = 0;
   var alen = a.length;
@@ -1214,32 +1240,38 @@ ElMap.prototype.calculate_stddev = function (a, offset) {
   }
   var mean = sum / (alen - offset);
   var variance = sq_sum / (alen - offset) - mean * mean;
-  this.mean = mean;
-  this.rms = Math.sqrt(variance);
+  return {mean: mean, rms: Math.sqrt(variance)};
+}
+
+var ElMap = function ElMap() {
+  this.unit_cell = null;
+  this.grid = null;
+  this.stats = { mean: 0.0, rms: 1.0 };
+  this.block = new Block();
 };
 
-ElMap.prototype.abs_level = function (sigma) {
-  return sigma * this.rms + this.mean;
+ElMap.prototype.abs_level = function abs_level (sigma /*:number*/) {
+  return sigma * this.stats.rms + this.stats.mean;
 };
 
 // http://www.ccp4.ac.uk/html/maplib.html#description
 // eslint-disable-next-line complexity
-ElMap.prototype.from_ccp4 = function (buf, expand_symmetry) {
-  if (expand_symmetry === undefined) expand_symmetry = true;
-  if (buf.byteLength < 1024) throw Error('File shorter than 1024 bytes.');
+ElMap.prototype.from_ccp4 = function from_ccp4 (buf /*:ArrayBuffer*/, expand_symmetry /*:?boolean*/) {
+  if (expand_symmetry === undefined) { expand_symmetry = true; }
+  if (buf.byteLength < 1024) { throw Error('File shorter than 1024 bytes.'); }
   //console.log('buf type: ' + Object.prototype.toString.call(buf));
   // for now we assume both file and host are little endian
   var iview = new Int32Array(buf, 0, 256);
   // word 53 - character string 'MAP ' to identify file type
-  if (iview[52] !== 0x2050414d) throw Error('not a CCP4 map');
+  if (iview[52] !== 0x2050414d) { throw Error('not a CCP4 map'); }
   // map has 3 dimensions referred to as columns (fastest changing), rows
   // and sections (c-r-s)
   var n_crs = [iview[0], iview[1], iview[2]];
-  this.mode = iview[3];
+  var mode = iview[3];
   var nb;
-  if (this.mode === 2) nb = 4;
-  else if (this.mode === 0) nb = 1;
-  else throw Error('Only Mode 2 and Mode 0 of CCP4 map is supported.');
+  if (mode === 2) { nb = 4; }
+  else if (mode === 0) { nb = 1; }
+  else { throw Error('Only Mode 2 and Mode 0 of CCP4 map is supported.'); }
   var start = [iview[4], iview[5], iview[6]];
   var n_grid = [iview[7], iview[8], iview[9]];
   var nsymbt = iview[23]; // size of extended header in bytes
@@ -1255,35 +1287,34 @@ ElMap.prototype.from_ccp4 = function (buf, expand_symmetry) {
   var ay = map_crs.indexOf(2);
   var az = map_crs.indexOf(3);
 
-  this.min = fview[19];
-  this.max = fview[20];
-  this.sg_number = iview[22];
-  this.lskflg = iview[24];
-  //console.log('map mean and rms:', this.mean.toFixed(4), this.rms.toFixed(4));
-  this.grid = new GridArray(n_grid);
+  var min = fview[19];
+  var max = fview[20];
+  //const sg_number = iview[22];
+  //const lskflg = iview[24];
+  var grid = new GridArray(n_grid);
   if (nsymbt % 4 !== 0) {
     throw Error('CCP4 map with NSYMBT not divisible by 4 is not supported.');
   }
   var data_view;
-  if (this.mode === 2) data_view = fview;
-  else /* this.mode === 0 */ data_view = new Int8Array(buf);
+  if (mode === 2) { data_view = fview; }
+  else /* mode === 0 */ { data_view = new Int8Array(buf); }
   var idx = (1024 + nsymbt) / nb | 0;
 
   // We assume that if DMEAN and RMS from the header are not clearly wrong
   // they are what the user wants. Because the map can cover a small part
   // of the asu and its rmsd may be different than the total rmsd.
-  this.mean = fview[21];
-  this.rms = fview[54];
-  if (this.mean < this.min || this.mean > this.max || this.rms <= 0) {
-    this.calculate_stddev(data_view, idx);
+  this.stats.mean = fview[21];
+  this.stats.rms = fview[54];
+  if (this.stats.mean < min || this.stats.mean > max || this.stats.rms <= 0) {
+    this.stats = calculate_stddev(data_view, idx);
   }
   var b1 = 1;
   var b0 = 0;
   // if the file was converted by mapmode2to0 - scale the data
-  if (this.mode === 0 && iview[39] === -128 && iview[40] === 127) {
+  if (mode === 0 && iview[39] === -128 && iview[40] === 127) {
     // scaling f(x)=b1*x+b0 such that f(-128)=min and f(127)=max
-    b1 = (this.max - this.min) / 255.0;
-    b0 = 0.5 * (this.min + this.max + b1);
+    b1 = (max - min) / 255.0;
+    b0 = 0.5 * (min + max + b1);
   }
 
   var end = [start[0] + n_crs[0], start[1] + n_crs[1], start[2] + n_crs[2]];
@@ -1291,8 +1322,7 @@ ElMap.prototype.from_ccp4 = function (buf, expand_symmetry) {
   for (it[2] = start[2]; it[2] < end[2]; it[2]++) { // sections
     for (it[1] = start[1]; it[1] < end[1]; it[1]++) { // rows
       for (it[0] = start[0]; it[0] < end[0]; it[0]++) { // cols
-        this.grid.set_grid_value(it[ax], it[ay], it[az],
-                                 b1 * data_view[idx] + b0);
+        grid.set_grid_value(it[ax], it[ay], it[az], b1 * data_view[idx] + b0);
         idx++;
       }
     }
@@ -1300,12 +1330,12 @@ ElMap.prototype.from_ccp4 = function (buf, expand_symmetry) {
   if (expand_symmetry && nsymbt > 0) {
     var u8view = new Uint8Array(buf);
     for (var i = 0; i+80 <= nsymbt; i += 80) {
-      var j;
+      var j = (void 0);
       var symop = '';
       for (j = 0; j < 80; ++j) {
         symop += String.fromCharCode(u8view[1024 + i + j]);
       }
-      if (/^\s*x\s*,\s*y\s*,\s*z\s*$/i.test(symop)) continue;  // skip x,y,z
+      if (/^\s*x\s*,\s*y\s*,\s*z\s*$/i.test(symop)) { continue; }// skip x,y,z
       //console.log('sym ops', symop.trim());
       var mat = parse_symop(symop);
       // Note: we apply here symops to grid points instead of coordinates.
@@ -1322,51 +1352,26 @@ ElMap.prototype.from_ccp4 = function (buf, expand_symmetry) {
               xyz[j] = it[ax] * mat[j][0] + it[ay] * mat[j][1] +
                        it[az] * mat[j][2] + mat[j][3];
             }
-            this.grid.set_grid_value(xyz[0], xyz[1], xyz[2],
-                                     b1 * data_view[idx] + b0);
+            grid.set_grid_value(xyz[0], xyz[1], xyz[2],
+                                b1 * data_view[idx] + b0);
             idx++;
           }
         }
       }
     }
   }
+  this.grid = grid;
 };
-
-// symop -> matrix ([x,y,z] = matrix * [x,y,z,1])
-function parse_symop(symop) {
-  var ops = symop.toLowerCase().replace(/\s+/g, '').split(',');
-  if (ops.length !== 3) throw Error('Unexpected symop: ' + symop);
-  var mat = [];
-  for (var i = 0; i < 3; i++) {
-    var terms = ops[i].split(/(?=[+-])/);
-    var row = [0, 0, 0, 0];
-    for (var j = 0; j < terms.length; j++) {
-      var term = terms[j];
-      var sign = (term[0] === '-' ? -1 : 1);
-      var m = terms[j].match(/^[+-]?([xyz])$/);
-      if (m) {
-        var pos = {x: 0, y: 1, z: 2}[m[1]];
-        row[pos] = sign;
-      } else {
-        m = terms[j].match(/^[+-]?(\d)\/(\d)$/);
-        if (!m) throw Error('What is ' + terms[j] + ' in ' + symop);
-        row[3] = sign * Number(m[1]) / Number(m[2]);
-      }
-    }
-    mat.push(row);
-  }
-  return mat;
-}
 
 // DSN6 MAP FORMAT
 // http://www.uoxray.uoregon.edu/tnt/manual/node104.html
 // Density values are stored as bytes.
-ElMap.prototype.from_dsn6 = function (buf) {
+ElMap.prototype.from_dsn6 = function from_dsn6 (buf /*: ArrayBuffer*/) {
   //console.log('buf type: ' + Object.prototype.toString.call(buf));
   var u8data = new Uint8Array(buf);
   var iview = new Int16Array(u8data.buffer);
   if (iview[18] !== 100) {
-    var len = iview.length;  // or only header, 256?
+    var len = iview.length;// or only header, 256?
     for (var n = 0; n < len; n++) {
       // swapping bytes with Uint8Array like this:
       // var tmp=u8data[n*2]; u8data[n*2]=u8data[n*2+1]; u8data[n*2+1]=tmp;
@@ -1388,15 +1393,15 @@ ElMap.prototype.from_dsn6 = function (buf) {
                                 cell_mult * iview[12],
                                 cell_mult * iview[13],
                                 cell_mult * iview[14]);
-  this.grid = new GridArray(n_grid);
+  var grid = new GridArray(n_grid);
   var prod = iview[15] / 100;
   var plus = iview[16];
   //var data_scale_factor = iview[15] / iview[18] + iview[16];
   // bricks have 512 (8x8x8) values
   var offset = 512;
   var n_blocks = [Math.ceil(n_real[0] / 8),
-                  Math.ceil(n_real[1] / 8),
-                  Math.ceil(n_real[2] / 8)];
+                    Math.ceil(n_real[1] / 8),
+                    Math.ceil(n_real[2] / 8)];
   for (var zz = 0; zz < n_blocks[2]; zz++) {
     for (var yy = 0; yy < n_blocks[1]; yy++) {
       for (var xx = 0; xx < n_blocks[0]; xx++) { // loop over bricks
@@ -1409,9 +1414,9 @@ ElMap.prototype.from_dsn6 = function (buf) {
               if (x < n_real[0] && y < n_real[1] && z < n_real[2]) {
                 var density = (u8data[offset] - plus) / prod;
                 offset++;
-                this.grid.set_grid_value(origin[0] + x,
-                                         origin[1] + y,
-                                         origin[2] + z, density);
+                grid.set_grid_value(origin[0] + x,
+                                    origin[1] + y,
+                                    origin[2] + z, density);
               } else {
                 offset += 8 - i;
                 break;
@@ -1422,33 +1427,35 @@ ElMap.prototype.from_dsn6 = function (buf) {
       }
     }
   }
-  this.calculate_stddev(this.grid.values, 0);
+  this.stats = calculate_stddev(grid.values, 0);
+  this.grid = grid;
   //this.show_debug_info();
 };
 
-ElMap.prototype.show_debug_info = function () {
-  console.log('unit cell: ' + this.unit_cell.parameters.join(', '));
-  console.log('grid: ' + this.grid.dim);
+ElMap.prototype.show_debug_info = function show_debug_info () {
+  console.log('unit cell:', this.unit_cell && this.unit_cell.parameters);
+  console.log('grid:', this.grid && this.grid.dim);
 };
 
 // Extract a block of density for calculating an isosurface using the
 // separate marching cubes implementation.
-ElMap.prototype.extract_block = function (radius, center) {
+ElMap.prototype.extract_block = function extract_block (radius/*:number*/, center /*:?number[]*/) {
   var grid = this.grid;
   var unit_cell = this.unit_cell;
+  if (grid == null || unit_cell == null) { return; }
   var grid_min = [0, 0, 0];
   var grid_max = grid.dim;
   if (center) {
-    var xyz_min = [center[0] - radius, center[1] - radius, center[2] - radius];
-    var xyz_max = [center[0] + radius, center[1] + radius, center[2] + radius];
+    var xyz_min = [center[0]-radius, center[1]-radius, center[2]-radius];
+    var xyz_max = [center[0]+radius, center[1]+radius, center[2]+radius];
     var frac_min = unit_cell.fractionalize(xyz_min);
     var frac_max = unit_cell.fractionalize(xyz_max);
     grid_min = grid.frac2grid(frac_min);
     grid_max = grid.frac2grid(frac_max);
   }
-  var nx = grid_max[0] - grid_min[0] + 1;
-  var ny = grid_max[1] - grid_min[1] + 1;
-  var nz = grid_max[2] - grid_min[2] + 1;
+  var size = [grid_max[0] - grid_min[0] + 1,
+                grid_max[1] - grid_min[1] + 1,
+                grid_max[2] - grid_min[2] + 1];
   var points = [];
   var values = [];
   for (var i = grid_min[0]; i <= grid_max[0]; i++) {
@@ -1462,14 +1469,39 @@ ElMap.prototype.extract_block = function (radius, center) {
       }
     }
   }
-  this.block = {points: points, values: values, size: [nx, ny, nz]};
+  this.block.set(points, values, size);
 };
 
-ElMap.prototype.isomesh_in_block = function (sigma, method) {
+ElMap.prototype.isomesh_in_block = function isomesh_in_block (sigma/*:number*/, method/*:string*/) {
   var abs_level = this.abs_level(sigma);
-  var bl = this.block;
-  return isosurface(bl.size, bl.values, bl.points, abs_level, method);
+  return this.block.isosurface(abs_level, method);
 };
+
+// symop -> matrix ([x,y,z] = matrix * [x,y,z,1])
+function parse_symop(symop) {
+  var ops = symop.toLowerCase().replace(/\s+/g, '').split(',');
+  if (ops.length !== 3) { throw Error('Unexpected symop: ' + symop); }
+  var mat = [];
+  for (var i = 0; i < 3; i++) {
+    var terms = ops[i].split(/(?=[+-])/);
+    var row = [0, 0, 0, 0];
+    for (var j = 0; j < terms.length; j++) {
+      var term = terms[j];
+      var sign = (term[0] === '-' ? -1 : 1);
+      var m = terms[j].match(/^[+-]?([xyz])$/);
+      if (m) {
+        var pos = {x: 0, y: 1, z: 2}[m[1]];
+        row[pos] = sign;
+      } else {
+        m = terms[j].match(/^[+-]?(\d)\/(\d)$/);
+        if (!m) { throw Error('What is ' + terms[j] + ' in ' + symop); }
+        row[3] = sign * Number(m[1]) / Number(m[2]);
+      }
+    }
+    mat.push(row);
+  }
+  return mat;
+}
 
 // @flow
 
@@ -1479,17 +1511,17 @@ ElMap.prototype.isomesh_in_block = function (sigma, method) {
 /*:: type Vector3 = {x: number, y: number, z: number} */
 
 var CUBE_EDGES = [[0, 0, 0], [1, 0, 0],
-                  [0, 0, 0], [0, 1, 0],
-                  [0, 0, 0], [0, 0, 1],
-                  [1, 0, 0], [1, 1, 0],
-                  [1, 0, 0], [1, 0, 1],
-                  [0, 1, 0], [1, 1, 0],
-                  [0, 1, 0], [0, 1, 1],
-                  [0, 0, 1], [1, 0, 1],
-                  [0, 0, 1], [0, 1, 1],
-                  [1, 0, 1], [1, 1, 1],
-                  [1, 1, 0], [1, 1, 1],
-                  [0, 1, 1], [1, 1, 1]];
+                    [0, 0, 0], [0, 1, 0],
+                    [0, 0, 0], [0, 0, 1],
+                    [1, 0, 0], [1, 1, 0],
+                    [1, 0, 0], [1, 0, 1],
+                    [0, 1, 0], [1, 1, 0],
+                    [0, 1, 0], [0, 1, 1],
+                    [0, 0, 1], [1, 0, 1],
+                    [0, 0, 1], [0, 1, 1],
+                    [1, 0, 1], [1, 1, 1],
+                    [1, 1, 0], [1, 1, 1],
+                    [0, 1, 1], [1, 1, 1]];
 
 function makeCube(size /*:number*/,
                          ctr /*:Vector3*/,
@@ -1513,15 +1545,13 @@ function makeCube(size /*:number*/,
 // A cube with 3 edges (for x, y, z axes) colored in red, green and blue.
 function makeRgbBox(transform_func /*:Num3 => Num3*/,
                            options /*:{[key:string]: any}*/) {
-  // flow-ignore-line - union in makeLineMaterial() confuses flow
   var vertices = CUBE_EDGES.map(function (a) {
     return { xyz: transform_func(a) };
   });
   var colors = [
     new THREE.Color(0xff0000), new THREE.Color(0xffaa00),
     new THREE.Color(0x00ff00), new THREE.Color(0xaaff00),
-    new THREE.Color(0x0000ff), new THREE.Color(0x00aaff),
-  ];
+    new THREE.Color(0x0000ff), new THREE.Color(0x00aaff) ];
   for (var j = 6; j < CUBE_EDGES.length; j++) {
     colors.push(options.color);
   }
@@ -1530,6 +1560,7 @@ function makeRgbBox(transform_func /*:Num3 => Num3*/,
     linewidth: 1,
     segments: true,
   });
+  // $FlowFixMe: the type of vertices confuses flow
   return makeLineSegments(material, vertices, colors);
 }
 
@@ -1538,14 +1569,14 @@ function double_pos(vertex_arr /*:Vector3[] | Atom[]*/) {
   var i;
   if (vertex_arr && vertex_arr[0].xyz) {
     for (i = 0; i < vertex_arr.length; i++) {
-      // flow-ignore-line - disjoint unions not smart enough
+      // $FlowFixMe: disjoint unions not smart enough
       var xyz /*:Num3*/ = vertex_arr[i].xyz;
       pos.push(xyz[0], xyz[1], xyz[2]);
       pos.push(xyz[0], xyz[1], xyz[2]);
     }
   } else {
     for (i = 0; i < vertex_arr.length; i++) {
-      // flow-ignore-line
+      // $FlowFixMe
       var v /*:Vector3*/ = vertex_arr[i];
       pos.push(v.x, v.y, v.z);
       pos.push(v.x, v.y, v.z);
@@ -1577,11 +1608,11 @@ function wide_line_geometry(vertex_arr, color_arr) {
   // could we use three overlapping views of the same buffer?
   var previous = new Float32Array(6*len);
   var i;
-  for (i = 0; i < 6; i++) previous[i] = pos[i];
-  for (; i < 6 * len; i++) previous[i] = pos[i-6];
+  for (i = 0; i < 6; i++) { previous[i] = pos[i]; }
+  for (; i < 6 * len; i++) { previous[i] = pos[i-6]; }
   var next = new Float32Array(6*len);
-  for (i = 0; i < 6 * (len-1); i++) next[i] = pos[i+6];
-  for (; i < 6 * len; i++) next[i] = pos[i];
+  for (i = 0; i < 6 * (len-1); i++) { next[i] = pos[i+6]; }
+  for (; i < 6 * len; i++) { next[i] = pos[i]; }
   var side = new Float32Array(2*len);
   for (i = 0; i < len; i++) {
     side[2*i] = 1;
@@ -1607,8 +1638,8 @@ function wide_segments_geometry(vertex_arr, color_arr) {
   var position = new Float32Array(pos);
   var other_vert = new Float32Array(6*len);
   for (i = 0; i < 6 * len; i += 12) {
-    for (j = 0; j < 6; j++) other_vert[i+j] = pos[i+j+6];
-    for (; j < 12; j++) other_vert[i+j] = pos[i+j-6];
+    for (j = 0; j < 6; j++) { other_vert[i+j] = pos[i+j+6]; }
+    for (; j < 12; j++) { other_vert[i+j] = pos[i+j-6]; }
   }
   var side = new Float32Array(2*len);
   for (i = 0; i < len; i++) {
@@ -1696,13 +1727,13 @@ function interpolate_vertices(segment, smooth) /*:Vector3[]*/{
     var xyz = segment[i].xyz;
     vertices.push(new THREE.Vector3(xyz[0], xyz[1], xyz[2]));
   }
-  if (!smooth || smooth < 2) return vertices;
+  if (!smooth || smooth < 2) { return vertices; }
   var curve = new THREE.CatmullRomCurve3(vertices);
   return curve.getPoints((segment.length - 1) * smooth);
 }
 
 function interpolate_colors(colors, smooth) {
-  if (!smooth || smooth < 2) return colors;
+  if (!smooth || smooth < 2) { return colors; }
   var ret = [];
   for (var i = 0; i < colors.length - 1; i++) {
     for (var j = 0; j < smooth; j++) {
@@ -1809,7 +1840,7 @@ function makeChickenWire(data /*:{vertices: number[], segments: number[]}*/,
   // Although almost all browsers support OES_element_index_uint nowadays,
   // use Uint32 indexes only when needed.
   var arr = (data.vertices.length < 3*65536 ? new Uint16Array(data.segments)
-                                            : new Uint32Array(data.segments));
+                                              : new Uint32Array(data.segments));
   //console.log('arr len:', data.vertices.length, data.segments.length);
   geom.setIndex(new THREE.BufferAttribute(arr, 1));
   var material = new THREE.LineBasicMaterial(parameters);
@@ -1841,7 +1872,7 @@ function makeGrid() {
   var pos = [];
   for (var i = -N; i <= N; i++) {
     var z = 0; // z only marks major/minor axes
-    if (i % 5 === 0) z = i % 2 === 0 ? 2 : 1;
+    if (i % 5 === 0) { z = i % 2 === 0 ? 2 : 1; }
     pos.push(-N, i, z, N, i, z);  // horizontal line
     pos.push(i, -N, z, i, N, z);  // vertical line
   }
@@ -1900,7 +1931,7 @@ function makeSimpleGeometry(vertices /*:Vector3[] | Atom[]*/,
   var i;
   if (vertices && vertices[0].xyz) {
     for (i = 0; i < vertices.length; i++) {
-      // flow-ignore-line - disjoint unions not smart enough
+      // $FlowFixMe: disjoint unions not smart enough
       var xyz /*:Num3*/ = vertices[i].xyz;
       pos[3*i] = xyz[0];
       pos[3*i+1] = xyz[1];
@@ -1908,7 +1939,7 @@ function makeSimpleGeometry(vertices /*:Vector3[] | Atom[]*/,
     }
   } else {
     for (i = 0; i < vertices.length; i++) {
-      // flow-ignore-line
+      // $FlowFixMe
       var v /*:Vector3*/ = vertices[i];
       pos[3*i] = v.x;
       pos[3*i+1] = v.y;
@@ -2020,10 +2051,10 @@ function line_raycast(raycaster, intersects) {
     vStart.fromArray(positions, 6 * i);
     vEnd.fromArray(positions, 6 * i + 6);
     var distSq = ray.distanceSqToSegment(vStart, vEnd, interRay, interSegment);
-    if (distSq > precisionSq) continue;
+    if (distSq > precisionSq) { continue; }
     interRay.applyMatrix4(this.matrixWorld);
     var distance = raycaster.ray.origin.distanceTo(interRay);
-    if (distance < raycaster.near || distance > raycaster.far) continue;
+    if (distance < raycaster.near || distance > raycaster.far) { continue; }
     intersects.push({
       distance: distance,
       point: interSegment.clone().applyMatrix4(this.matrixWorld),
@@ -2035,18 +2066,18 @@ function line_raycast(raycaster, intersects) {
 }
 
 function makeCanvasWithText(text, options) {
-  if (typeof document === 'undefined') return;  // for testing on node
+  if (typeof document === 'undefined') { return; }  // for testing on node
   var canvas = document.createElement('canvas');
   // Canvas size should be 2^N.
   canvas.width = 256;  // arbitrary limit, to keep it simple
   canvas.height = 16;  // font size
   var context = canvas.getContext('2d');
-  if (!context) return null;
+  if (!context) { return null; }
   context.font = (options.font || 'bold 14px') + ' sans-serif';
   //context.fillStyle = 'green';
   //context.fillRect(0, 0, canvas.width, canvas.height);
   context.textBaseline = 'bottom';
-  if (options.color) context.fillStyle = options.color;
+  if (options.color) { context.fillStyle = options.color; }
   context.fillText(text, 0, canvas.height);
   return canvas;
 }
@@ -2075,7 +2106,7 @@ var label_frag = [
 
 function makeLabel(text /*:string*/, options /*:{[key:string]: any}*/) {
   var canvas = makeCanvasWithText(text, options);
-  if (!canvas) return;
+  if (!canvas) { return; }
   var texture = new THREE.Texture(canvas);
   texture.needsUpdate = true;
 
@@ -2193,10 +2224,7 @@ var ColorSchemes = [ // Viewer.prototype.ColorSchemes
     O: 0xC33869,
     S: 0x9E7B3D,
     def: 0x808080,
-  },
-];
-
-var auto_speed = 1.0;
+  } ];
 
 // map 2d position to sphere with radius 1.
 function project_on_ball(x, y) {
@@ -2217,11 +2245,12 @@ function scale_by_height(value, size) { // for scaling bond_line
 }
 
 var STATE = {NONE: -1, ROTATE: 0, PAN: 1, ZOOM: 2, PAN_ZOOM: 3, SLAB: 4,
-             ROLL: 5, AUTO_ROTATE: 6, GO: 7};
+               ROLL: 5, AUTO_ROTATE: 6, GO: 7};
 
 
 // based on three.js/examples/js/controls/OrthographicTrackballControls.js
-var Controls = function (camera, target) {
+function Controls(camera, target) {
+  var auto_speed = 1.0;
   var _state = STATE.NONE;
   var _rotate_start = new THREE.Vector3();
   var _rotate_end = new THREE.Vector3();
@@ -2368,7 +2397,7 @@ var Controls = function (camera, target) {
 
   this.move = function (x, y, dist) {
     switch (_state) {
-      case STATE.ROTATE:
+      case STATE.ROTATE: {
         var xyz = project_on_ball(x, y);
         //console.log(camera.projectionMatrix);
         //console.log(camera.matrixWorld);
@@ -2378,6 +2407,7 @@ var Controls = function (camera, target) {
         _rotate_end.addScaledVector(camera.up, xyz[1] / camera.up.length());
         _rotate_end.addScaledVector(eye, xyz[2] / eye.length());
         break;
+      }
       case STATE.ZOOM:
       case STATE.SLAB:
       case STATE.ROLL:
@@ -2395,7 +2425,7 @@ var Controls = function (camera, target) {
 
   this.stop = function () {
     var ret = null;
-    if (_state === STATE.PAN && !_panned) ret = _pan_start;
+    if (_state === STATE.PAN && !_panned) { ret = _pan_start; }
     _state = STATE.NONE;
     _rotate_start.copy(_rotate_end);
     _pinch_start = _pinch_end;
@@ -2407,13 +2437,13 @@ var Controls = function (camera, target) {
     if (targ instanceof Array) {
       targ = new THREE.Vector3(targ[0], targ[1], targ[2]);
     }
-    if ((!targ || targ.distanceToSquared(target) < 0.1) &&
+    if ((!targ || targ.distanceToSquared(target) < 0.001) &&
         (!cam_pos || cam_pos.distanceToSquared(camera.position) < 0.1) &&
         (!cam_up || cam_up.distanceToSquared(camera.up) < 0.1)) {
       return;
     }
     _state = STATE.GO;
-    steps = steps || (60 / auto_speed);
+    steps = (steps || 60) / auto_speed;
     var alphas = [];
     var prev_pos = 0;
     for (var i = 1; i <= steps; ++i) {
@@ -2427,26 +2457,26 @@ var Controls = function (camera, target) {
       var a = alphas.shift();
       if (targ) {
         // unspecified cam_pos - camera stays in the same distance to target
-        if (!cam_pos) camera.position.sub(target);
+        if (!cam_pos) { camera.position.sub(target); }
         target.lerp(targ, a);
-        if (!cam_pos) camera.position.add(target);
+        if (!cam_pos) { camera.position.add(target); }
       }
-      if (cam_pos) camera.position.lerp(cam_pos, a);
-      if (cam_up) camera.up.lerp(cam_up, a);
+      if (cam_pos) { camera.position.lerp(cam_pos, a); }
+      if (cam_up) { camera.up.lerp(cam_up, a); }
       if (alphas.length === 0) {
         _state = STATE.NONE;
         _go_func = null;
       }
     };
   };
-};
+}
 
 
-// constants
+// options handled by select_next()
 
 var COLOR_AIMS = ['element', 'B-factor', 'occupancy', 'index', 'chain'];
-var RENDER_STYLES = ['lines', 'trace', 'ribbon'/*, 'ball&stick'*/];
-var MAP_STYLES = ['marching cubes', 'squarish'/*, 'snapped MC'*/];
+var RENDER_STYLES = ['lines', 'trace', 'ribbon' ];
+var MAP_STYLES = ['marching cubes', 'squarish' ];
 var LINE_STYLES = ['normal', 'simplistic'];
 var LABEL_FONTS = ['bold 14px', '14px', '16px', 'bold 16px'];
 
@@ -2473,8 +2503,8 @@ function color_by(style, atoms, elem_colors) {
     var vmax = -Infinity;
     for (i = 0; i < atoms.length; i++) {
       var v = atoms[i].b;
-      if (v > vmax) vmax = v;
-      if (v < vmin) vmin = v;
+      if (v > vmax) { vmax = v; }
+      if (v < vmin) { vmin = v; }
     }
     //console.log('B-factors in [' + vmin + ', ' + vmax + ']');
     color_func = function (atom) {
@@ -2541,12 +2571,12 @@ ModelBag.prototype.add_bonds = function (ligands_only, ball_size) {
   var vertex_arr /*:THREE.Vector3[]*/ = [];
   var color_arr = [];
   var opt = { hydrogens: this.conf.hydrogens,
-              ligands_only: ligands_only,
-              balls: this.conf.render_style === 'ball&stick' };
+                ligands_only: ligands_only,
+                balls: this.conf.render_style === 'ball&stick' };
   for (var i = 0; i < visible_atoms.length; i++) {
     var atom = visible_atoms[i];
     var color = colors[i];
-    if (ligands_only && !atom.is_ligand) continue;
+    if (ligands_only && !atom.is_ligand) { continue; }
     if (atom.bonds.length === 0 && !opt.balls) { // nonbonded, draw star
       addXyzCross(vertex_arr, atom.xyz, 0.7);
       for (var n = 0; n < 6; n++) {
@@ -2555,10 +2585,10 @@ ModelBag.prototype.add_bonds = function (ligands_only, ball_size) {
     } else { // bonded, draw lines
       for (var j = 0; j < atom.bonds.length; j++) {
         var other = this.model.atoms[atom.bonds[j]];
-        if (!opt.hydrogens && other.element === 'H') continue;
+        if (!opt.hydrogens && other.element === 'H') { continue; }
         // Coot show X-H bonds as thinner lines in a single color.
         // Here we keep it simple and render such bonds like all others.
-        if (opt.ligands_only && !other.is_ligand) continue;
+        if (opt.ligands_only && !other.is_ligand) { continue; }
         var mid = atom.midpoint(other);
         var vmid = new THREE.Vector3(mid[0], mid[1], mid[2]);
         var vatom = new THREE.Vector3(atom.xyz[0], atom.xyz[1], atom.xyz[2]);
@@ -2682,8 +2712,8 @@ function Viewer(options /*: {[key: string]: any}*/) {
   this.raycaster = new THREE.Raycaster();
   this.default_camera_pos = [0, 0, 100];
   this.set_common_key_bindings();
-  if (this.constructor === Viewer) this.set_real_space_key_bindings();
-  if (typeof document === 'undefined') return;  // for testing on node
+  if (this.constructor === Viewer) { this.set_real_space_key_bindings(); }
+  if (typeof document === 'undefined') { return; }  // for testing on node
 
   try {
     this.renderer = new THREE.WebGLRenderer({antialias: true});
@@ -2694,7 +2724,7 @@ function Viewer(options /*: {[key: string]: any}*/) {
   }
 
   function get_elem(name) {
-    if (options[name] === null) return null;
+    if (options[name] === null) { return null; }
     return document.getElementById(options[name] || name);
   }
   this.container = get_elem('viewer');
@@ -2705,7 +2735,7 @@ function Viewer(options /*: {[key: string]: any}*/) {
     this.initial_hud_bg = this.hud_el.style['background-color'];
   }
 
-  if (this.container === null) return; // can be null in headless tests
+  if (this.container === null) { return; } // can be null in headless tests
   this.renderer.setClearColor(this.config.colors.bg, 1);
   this.renderer.setPixelRatio(window.devicePixelRatio);
   this.resize();
@@ -2754,7 +2784,7 @@ function Viewer(options /*: {[key: string]: any}*/) {
     if (not_panned) {
       var atom = self.pick_atom(not_panned, self.camera);
       if (atom != null) {
-        self.select_atom(atom, {steps: 60 / auto_speed});
+        self.select_atom(atom, {steps: 60});
       }
     }
     self.redraw_maps();
@@ -2766,14 +2796,14 @@ function Viewer(options /*: {[key: string]: any}*/) {
 
 Viewer.prototype.pick_atom = function (coords, camera) {
   var bag = this.active_model_bag;
-  if (bag === null) return;
+  if (bag === null) { return; }
   this.raycaster.setFromCamera(coords, camera);
   this.raycaster.near = camera.near;
   // '0.15' b/c the furthest 15% is hardly visible in the fog
   this.raycaster.far = camera.far - 0.15 * (camera.far - camera.near);
   this.raycaster.linePrecision = 0.3;
   var intersects = this.raycaster.intersectObjects(bag.atomic_objects);
-  if (intersects.length < 1) return null;
+  if (intersects.length < 1) { return null; }
   intersects.sort(function (x) { return x.line_dist || Infinity; });
   var p = intersects[0].point;
   return bag.model.get_nearest_atom(p.x, p.y, p.z);
@@ -2793,7 +2823,7 @@ Viewer.prototype.set_colors = function (scheme) {
       }
     }
   }
-  if (scheme.bg === undefined) return;
+  if (scheme.bg === undefined) { return; }
   if (typeof scheme.bg === 'number') {
     for (var key in scheme) {
       if (key !== 'name') {
@@ -2816,7 +2846,7 @@ Viewer.prototype.relY = function (evt) {
 };
 
 Viewer.prototype.hud = function (text, type) {
-  if (typeof document === 'undefined') return;  // for testing on node
+  if (typeof document === 'undefined') { return; }  // for testing on node
   var el = this.hud_el;
   if (el) {
     if (text !== undefined) {
@@ -2830,7 +2860,7 @@ Viewer.prototype.hud = function (text, type) {
     }
     var err = (type === 'ERR');
     el.style['background-color'] = (err ? '#b00' : this.initial_hud_bg);
-    if (err) console.log('ERR: ' + text);
+    if (err) { console.log('ERR: ' + text); }
   } else {
     console.log('hud: ' + text);
   }
@@ -2862,8 +2892,8 @@ Viewer.prototype.redraw_maps = function (force) {
 };
 
 Viewer.prototype.remove_and_dispose = function (obj, only_dispose) {
-  if (!only_dispose) this.scene.remove(obj);
-  if (obj.geometry) obj.geometry.dispose();
+  if (!only_dispose) { this.scene.remove(obj); }
+  if (obj.geometry) { obj.geometry.dispose(); }
   if (obj.material) {
     if (obj.material.uniforms && obj.material.uniforms.map) {
       obj.material.uniforms.map.value.dispose();
@@ -2897,11 +2927,12 @@ Viewer.prototype.set_atomic_objects = function (model_bag) {
     case 'lines':
       model_bag.add_bonds();
       break;
-    case 'ball&stick':
+    case 'ball&stick': {
       var h_scale = this.camera.projectionMatrix.elements[5];
       var ball_size = Math.max(1, 200 * h_scale);
       model_bag.add_bonds(false, ball_size);
       break;
+    }
     case 'trace':  // + lines for ligands
       model_bag.add_trace();
       model_bag.add_bonds(true);
@@ -2918,24 +2949,24 @@ Viewer.prototype.set_atomic_objects = function (model_bag) {
 
 // Add/remove label if `show` is specified, toggle otherwise.
 Viewer.prototype.toggle_label = function (atom, show) {
-  if (!atom) return;
+  if (!atom) { return; }
   var text = atom.short_label();
   var uid = text; // we assume that the labels are unique - often true
   var is_shown = (uid in this.labels);
-  if (show === undefined) show = !is_shown;
+  if (show === undefined) { show = !is_shown; }
   if (show) {
-    if (is_shown) return;
+    if (is_shown) { return; }
     var label = makeLabel(text, {
       pos: atom.xyz,
       font: this.config.label_font,
       color: '#' + this.config.colors.fg.getHexString(),
       win_size: this.window_size,
     });
-    if (!label) return;
+    if (!label) { return; }
     this.labels[uid] = label;
     this.scene.add(label);
   } else {
-    if (!is_shown) return;
+    if (!is_shown) { return; }
     this.remove_and_dispose(this.labels[uid]);
     delete this.labels[uid];
   }
@@ -2964,7 +2995,7 @@ Viewer.prototype.toggle_map_visibility = function (map_bag) {
 Viewer.prototype.redraw_map = function (map_bag) {
   this.clear_el_objects(map_bag);
   if (map_bag.visible) {
-    map_bag.map.block = null;
+    map_bag.map.block.clear();
     this.add_el_objects(map_bag);
   }
 };
@@ -2990,11 +3021,11 @@ Viewer.prototype.redraw_models = function () {
 };
 
 Viewer.prototype.add_el_objects = function (map_bag) {
-  if (!map_bag.visible || this.config.map_radius <= 0) return;
-  if (!map_bag.map.block) {
-    map_bag.block_ctr.copy(this.target);
-    map_bag.map.extract_block(this.config.map_radius,
-                              [this.target.x, this.target.y, this.target.z]);
+  if (!map_bag.visible || this.config.map_radius <= 0) { return; }
+  if (map_bag.map.block.empty()) {
+    var t = this.target;
+    map_bag.block_ctr.copy(t);
+    map_bag.map.extract_block(this.config.map_radius, [t.x, t.y, t.z]);
   }
   for (var i = 0; i < map_bag.types.length; i++) {
     var mtype = map_bag.types[i];
@@ -3011,7 +3042,7 @@ Viewer.prototype.add_el_objects = function (map_bag) {
 };
 
 Viewer.prototype.change_isolevel_by = function (map_idx, delta) {
-  if (map_idx >= this.map_bags.length) return;
+  if (map_idx >= this.map_bags.length) { return; }
   var map_bag = this.map_bags[map_idx];
   map_bag.isolevel += delta;
   //TODO: move slow part into update()
@@ -3037,8 +3068,8 @@ Viewer.prototype.change_map_radius = function (delta) {
   var cf = this.config;
   cf.map_radius = Math.min(Math.max(cf.map_radius + delta, 0), RMAX);
   var info = 'map "radius": ' + cf.map_radius;
-  if (cf.map_radius === RMAX) info += ' (max)';
-  else if (cf.map_radius === 0) info += ' (hidden maps)';
+  if (cf.map_radius === RMAX) { info += ' (max)'; }
+  else if (cf.map_radius === 0) { info += ' (hidden maps)'; }
   this.hud(info);
   this.redraw_maps(true);
 };
@@ -3075,15 +3106,15 @@ Viewer.prototype.toggle_full_screen = function () {
   if (d.fullscreenElement || d.mozFullScreenElement ||
       d.webkitFullscreenElement || d.msFullscreenElement) {
     var ex = d.exitFullscreen || d.webkitExitFullscreen ||
-    // flow-ignore-line property `msExitFullscreen` not found in document
+    // $FlowFixMe: property `msExitFullscreen` not found in document
              d.mozCancelFullScreen || d.msExitFullscreen;
-    // flow-ignore-line cannot call property `exitFullscreen` of unknown type
-    if (ex) ex.call(d);
+    // $FlowFixMe: cannot call property `exitFullscreen` of unknown type
+    if (ex) { ex.call(d); }
   } else {
     var el = this.container;
     var req = el.requestFullscreen || el.webkitRequestFullscreen ||
               el.mozRequestFullScreen || el.msRequestFullscreen;
-    if (req) req.call(el);
+    if (req) { req.call(el); }
   }
 };
 
@@ -3101,7 +3132,7 @@ Viewer.prototype.toggle_cell_box = function () {
       uc = this.map_bags[0].map.unit_cell;
     }
     if (uc) {
-      this.decor.cell_box = makeRgbBox(uc.orthogonalize, {
+      this.decor.cell_box = makeRgbBox(uc.orthogonalize.bind(uc), {
         color: this.config.colors.fg,
       });
       this.scene.add(this.decor.cell_box);
@@ -3125,17 +3156,17 @@ Viewer.prototype.shift_clip = function (delta) {
 
 Viewer.prototype.go_to_nearest_Ca = function () {
   var t = this.target;
-  if (this.active_model_bag === null) return;
+  if (this.active_model_bag === null) { return; }
   var a = this.active_model_bag.model.get_nearest_atom(t.x, t.y, t.z, 'CA');
   if (a) {
-    this.select_atom(a);
+    this.select_atom(a, {steps: 30});
   } else {
     this.hud('no nearby CA');
   }
 };
 
 Viewer.prototype.permalink = function () {
-  if (typeof window === 'undefined') return;
+  if (typeof window === 'undefined') { return; }
   window.location.hash = '#xyz=' + vec3_to_fixed(this.target, 1).join(',') +
     '&eye=' + vec3_to_fixed(this.camera.position, 1).join(',') +
     '&zoom=' + this.camera.zoom.toFixed(0);
@@ -3143,9 +3174,9 @@ Viewer.prototype.permalink = function () {
 };
 
 Viewer.prototype.redraw_all = function () {
-  if (!this.renderer) return;
+  if (!this.renderer) { return; }
   this.scene.fog.color = this.config.colors.bg;
-  if (this.renderer) this.renderer.setClearColor(this.config.colors.bg, 1);
+  if (this.renderer) { this.renderer.setClearColor(this.config.colors.bg, 1); }
   this.redraw_models();
   this.redraw_maps(true);
   this.redraw_labels();
@@ -3153,7 +3184,7 @@ Viewer.prototype.redraw_all = function () {
 
 Viewer.prototype.toggle_help = function () {
   var el = this.help_el;
-  if (!el) return;
+  if (!el) { return; }
   el.style.display = el.style.display === 'block' ? 'none' : 'block';
   if (el.innerHTML === '') {
     el.innerHTML = [this.MOUSE_HELP, this.KEYBOARD_HELP,
@@ -3169,8 +3200,7 @@ Viewer.prototype.MOUSE_HELP = [
   'Ctrl+Right = clipping',
   'Ctrl+Shift+Right = roll',
   'Wheel = σ level',
-  'Shift+Wheel = diff map σ',
-].join('\n');
+  'Shift+Wheel = diff map σ' ].join('\n');
 
 Viewer.prototype.KEYBOARD_HELP = [
   '<b>keyboard:</b>',
@@ -3195,8 +3225,7 @@ Viewer.prototype.KEYBOARD_HELP = [
   'P = nearest Cα',
   'Shift+P = permalink',
   '(Shift+)space = next res.',
-  'Shift+F = full screen',
-].join('\n');
+  'Shift+F = full screen' ].join('\n');
 
 Viewer.prototype.ABOUT_HELP =
   '<a href="https://uglymol.github.io">about uglymol</a>';
@@ -3220,22 +3249,14 @@ Viewer.prototype.keydown = function (evt) {
   if (action) {
     (action.bind(this))(evt);
   } else {
-    if (action === false) evt.preventDefault();
-    if (this.help_el) this.hud('Nothing here. Press H for help.');
+    if (action === false) { evt.preventDefault(); }
+    if (this.help_el) { this.hud('Nothing here. Press H for help.'); }
   }
   this.request_render();
 };
 
 Viewer.prototype.set_common_key_bindings = function () {
   var kb = new Array(256);
-  // Home
-  kb[36] = function (evt) {
-    evt.ctrlKey ? this.change_map_line(0.1) : this.change_bond_line(0.2);
-  };
-  // End
-  kb[35] = function (evt) {
-    evt.ctrlKey ? this.change_map_line(-0.1) : this.change_bond_line(-0.2);
-  };
   // b
   kb[66] = function (evt) {
     this.select_next('color scheme', 'colors', this.ColorSchemes, evt.shiftKey);
@@ -3328,6 +3349,14 @@ Viewer.prototype.set_common_key_bindings = function () {
 
 Viewer.prototype.set_real_space_key_bindings = function () {
   var kb = this.key_bindings;
+  // Home
+  kb[36] = function (evt) {
+    evt.ctrlKey ? this.change_map_line(0.1) : this.change_bond_line(0.2);
+  };
+  // End
+  kb[35] = function (evt) {
+    evt.ctrlKey ? this.change_map_line(-0.1) : this.change_bond_line(-0.2);
+  };
   // Space
   kb[32] = function (evt) { this.center_next_residue(evt.shiftKey); };
   // p
@@ -3376,7 +3405,7 @@ Viewer.prototype.mousedown = function (event) {
 };
 
 Viewer.prototype.dblclick = function (event) {
-  if (event.button !== 0) return;
+  if (event.button !== 0) { return; }
   if (this.decor.selection) {
     this.remove_and_dispose(this.decor.selection);
     this.decor.selection = null;
@@ -3472,7 +3501,7 @@ Viewer.prototype.resize = function (/*evt*/) {
 // makes sense only for full-window viewer
 function parse_url_fragment() {
   var ret = {};
-  if (typeof window === 'undefined') return ret;
+  if (typeof window === 'undefined') { return ret; }
   var params = window.location.hash.substr(1).split('&');
   for (var i = 0; i < params.length; i++) {
     var kv = params[i].split('=');
@@ -3517,16 +3546,16 @@ Viewer.prototype.recenter = function (xyz, cam, steps) {
 };
 
 Viewer.prototype.center_next_residue = function (back) {
-  if (!this.active_model_bag) return;
+  if (!this.active_model_bag) { return; }
   var a = this.active_model_bag.model.next_residue(this.selected_atom, back);
-  if (a) this.select_atom(a);
+  if (a) { this.select_atom(a, {steps: 30}); }
 };
 
 Viewer.prototype.select_atom = function (atom, options) {
-  options = options || {};
+  if ( options === void 0 ) options = {};
+
   this.hud('-> ' + atom.long_label());
-  var steps = options.steps || 30. / auto_speed;
-  this.controls.go_to(atom.xyz, null, null, steps);
+  this.controls.go_to(atom.xyz, null, null, options.steps);
   this.toggle_label(this.selected_atom);
   this.selected_atom = atom;
   this.toggle_label(atom);
@@ -3547,17 +3576,17 @@ Viewer.prototype.update_camera = function () {
 // It is also triggered by keydown events.
 Viewer.prototype.render = function () {
   this.scheduled = true;
-  if (this.renderer === null) return;
+  if (this.renderer === null) { return; }
   if (this.controls.update()) {
     this.update_camera();
   }
   var tied = this.tied_viewer;
   if (!this.controls.is_going()) {
     this.redraw_maps();
-    if (tied && !tied.scheduled) tied.redraw_maps();
+    if (tied && !tied.scheduled) { tied.redraw_maps(); }
   }
   this.renderer.render(this.scene, this.camera);
-  if (tied && !tied.scheduled) tied.renderer.render(tied.scene, tied.camera);
+  if (tied && !tied.scheduled) { tied.renderer.render(tied.scene, tied.camera); }
   if (this.nav) {
     this.nav.renderer.render(this.nav.scene, this.camera);
   }
@@ -3596,7 +3625,7 @@ Viewer.prototype.add_map = function (map, is_diff_map) {
 Viewer.prototype.load_file = function (url/*:string*/,
                                        options/*:{[id:string]: mixed}*/,
                                        callback/*:Function*/) {
-  if (this.renderer === null) return;  // no WebGL detected
+  if (this.renderer === null) { return; }  // no WebGL detected
   var req = new XMLHttpRequest();
   req.open('GET', url, true);
   if (options.binary) {
@@ -3621,13 +3650,13 @@ Viewer.prototype.load_file = function (url/*:string*/,
     }
   };
   if (options.progress) {
-    // flow-ignore-line  dom.js in flow is incomplete
+    // $FlowFixMe: dom.js in flow is incomplete
     req.addEventListener('progress', function (evt /*:ProgressEvent*/) {
       if (evt.lengthComputable && evt.loaded && evt.total) {
         var fn = url.split('/').pop();
         self.hud('loading ' + fn + ' ... ' +
                  (evt.loaded >> 10) + ' / ' + (evt.total >> 10) + ' kB');
-        if (evt.loaded === evt.total) self.hud(); // clear progress message
+        if (evt.loaded === evt.total) { self.hud(); } // clear progress message
       }
     });
   }
@@ -3640,7 +3669,7 @@ Viewer.prototype.load_file = function (url/*:string*/,
 
 Viewer.prototype.set_view = function (options) {
   var frag = parse_url_fragment();
-  if (frag.zoom) this.camera.zoom = frag.zoom;
+  if (frag.zoom) { this.camera.zoom = frag.zoom; }
   this.recenter(frag.xyz || (options && options.center), frag.eye, 1);
 };
 
@@ -3652,7 +3681,7 @@ Viewer.prototype.load_pdb = function (url, options, callback) {
     model.from_pdb(req.responseText);
     self.set_model(model);
     self.set_view(options);
-    if (callback) callback();
+    if (callback) { callback(); }
   });
 };
 
@@ -3663,10 +3692,10 @@ Viewer.prototype.load_map = function (url, options, callback) {
   var self = this;
   this.load_file(url, {binary: true, progress: true}, function (req) {
     var map = new ElMap();
-    if (options.format === 'ccp4') map.from_ccp4(req.response, true);
-    else /* === 'dsn6'*/ map.from_dsn6(req.response);
+    if (options.format === 'ccp4') { map.from_ccp4(req.response, true); }
+    else /* === 'dsn6'*/ { map.from_dsn6(req.response); }
     self.add_map(map, options.diff_map);
-    if (callback) callback();
+    if (callback) { callback(); }
   });
 };
 
@@ -3709,6 +3738,7 @@ Viewer.prototype.show_nav = function (inset_id) {
 Viewer.prototype.ColorSchemes = ColorSchemes;
 
 // @flow
+// options handled by Viewer#select_next()
 var SPOT_SEL = ['all', 'indexed', 'not indexed'];
 var SHOW_AXES = ['three', 'two', 'none'];
 
@@ -3724,6 +3754,7 @@ function ReciprocalViewer(options /*: {[key: string]: any}*/) {
   this.config.show_only = SPOT_SEL[0];
   this.config.show_axes = SHOW_AXES[0];
   this.set_reciprocal_key_bindings();
+  this.set_dropzone();
 }
 
 ReciprocalViewer.prototype = Object.create(Viewer.prototype);
@@ -3738,12 +3769,11 @@ ReciprocalViewer.prototype.KEYBOARD_HELP = [
   'M/N = zoom',
   'D/F = clip width',
   'R = center view',
-  'Home/End = point size',
+  'Z/X = point size',
   'Shift+P = permalink',
   'Shift+F = full screen',
   '←/→ = max resol.',
-  '↑/↓ = min resol.',
-].join('\n');
+  '↑/↓ = min resol.' ].join('\n');
 
 ReciprocalViewer.prototype.MOUSE_HELP = Viewer.prototype.MOUSE_HELP
                                         .split('\n').slice(0, -2).join('\n');
@@ -3760,16 +3790,16 @@ ReciprocalViewer.prototype.set_reciprocal_key_bindings = function () {
   // v
   kb[86] = function (evt) {
     this.select_next('show', 'show_only', SPOT_SEL, evt.shiftKey);
-    var show_only = this.points.material.uniforms.show_only;
     var sel_map = { 'all': -2, 'indexed': 0, 'not indexed': -1 };
-    show_only.value = sel_map[this.config.show_only];
+    var sel = sel_map[this.config.show_only];
+    this.points.material.uniforms.show_only.value = sel;
   };
-  // Home
-  kb[36] = function (evt) {
+  // x
+  kb[88] = function (evt) {
     evt.ctrlKey ? this.change_map_line(0.1) : this.change_point_size(0.5);
   };
-  // End
-  kb[35] = function (evt) {
+  // z
+  kb[90] = function (evt) {
     evt.ctrlKey ? this.change_map_line(-0.1) : this.change_point_size(-0.5);
   };
   // 3, numpad 3
@@ -3786,49 +3816,108 @@ ReciprocalViewer.prototype.set_reciprocal_key_bindings = function () {
   kb[40] = function () { this.change_dmax(-0.025); };
 };
 
-ReciprocalViewer.prototype.load_data = function (url, options) {
-  options = options || {};
+ReciprocalViewer.prototype.set_dropzone = function () {
+  if (typeof document === 'undefined') { return; }  // for testing on node
+  var zone = this.renderer.domElement;
   var self = this;
-  this.load_file(url, {binary: false, progress: true}, function (req) {
-    self.parse_data(req.responseText);
-    self.set_axes();
-    self.set_points();
-    self.camera.zoom = 0.5 * (self.camera.top - self.camera.bottom);
-    // default scale is set to 100 - same as default_camera_pos
-    var d = 1.01 * self.max_dist;
-    self.controls.slab_width = [d, d, 100];
-    self.set_view(options);
-    if (options.callback) options.callback();
+  zone.addEventListener('dragover', function (e) {
+    e.stopPropagation();
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    self.hud('ready for drop...');
+  });
+  zone.addEventListener('drop', function (e) {
+    e.stopPropagation();
+    e.preventDefault();
+    var file = e.dataTransfer.files[0];
+    if (file == null) { return; }
+    var reader = new FileReader();
+    reader.onload = function (evt) {
+      self.load_from_string(evt.target.result, {});
+    };
+    reader.readAsText(file);
+    self.hud('loading ' + file.name);
   });
 };
 
-ReciprocalViewer.prototype.parse_data = function (text) {
+ReciprocalViewer.prototype.load_data = function (url, options) {
+  if ( options === void 0 ) options = {};
+
+  var self = this;
+  this.load_file(url, {binary: false, progress: true}, function (req) {
+    self.load_from_string(req.responseText, options);
+    if (options.callback) { options.callback(); }
+  });
+};
+
+ReciprocalViewer.prototype.load_from_string = function (text, options) {
+  if (text[0] === '{') {
+    this.data = parse_json(text);
+  } else {
+    this.data = parse_csv(text);
+  }
+  this.max_dist = max_dist(this.data.pos);
+  this.d_min = 1 / this.max_dist;
+  this.set_axes();
+  this.set_points();
+  this.camera.zoom = 0.5 * (this.camera.top - this.camera.bottom);
+  // default scale is set to 100 - same as default_camera_pos
+  var d = 1.01 * this.max_dist;
+  this.controls.slab_width = [d, d, 100];
+  this.set_view(options);
+};
+
+function max_dist(pos) {
+  var max_sq = 0;
+  for (var i = 0; i < pos.length; i += 3) {
+    var n = 3 * i;
+    var sq = pos[n]*pos[n] + pos[n+1]*pos[n+1] + pos[n+2]*pos[n+2];
+    if (sq > max_sq) { max_sq = sq; }
+  }
+  return Math.sqrt(max_sq);
+}
+
+function parse_csv(text) {
   var lines = text.split('\n').filter(function (line) {
     return line.length > 0 && line[0] !== '#';
   });
   var pos = new Float32Array(lines.length * 3);
   var lattice_ids = [];
-  var max_sq = 0;
   for (var i = 0; i < lines.length; i++) {
     var nums = lines[i].split(',').map(Number);
-    var sq = nums[0]*nums[0] + nums[1]*nums[1] + nums[2]*nums[2];
-    if (sq > max_sq) max_sq = sq;
     for (var j = 0; j < 3; j++) {
       pos[3*i+j] = nums[j];
     }
     lattice_ids.push(nums[3]);
   }
-  this.max_dist = Math.sqrt(max_sq);
-  this.d_min = 1 / this.max_dist;
-  this.data = { pos: pos, lattice_ids: lattice_ids };
-};
+  return { pos: pos, lattice_ids: lattice_ids };
+}
+
+function minus_ones(n) {
+  var a = [];
+  for (var i = 0; i < n; i++) { a.push(-1); }
+  return a;
+}
+
+function parse_json(text) {
+  var d = JSON.parse(text);
+  var n = d.rlp.length;
+  var pos = new Float32Array(3*n);
+  for (var i = 0; i < n; i++) {
+    for (var j = 0; j < 3; j++) {
+      pos[3*i+j] = d.rlp[i][j];
+    }
+  }
+  var lattice_ids = d.experiment_id || minus_ones(n);
+  return { pos: pos, lattice_ids: lattice_ids };
+}
 
 ReciprocalViewer.prototype.set_axes = function () {
   if (this.axes != null) {
     this.remove_and_dispose(this.axes);
     this.axes = null;
   }
-  if (this.config.show_axes === 'none') return;
+  if (this.config.show_axes === 'none') { return; }
   var axis_length = 1.2 * this.max_dist;
   var vertices = [];
   addXyzCross(vertices, [0, 0, 0], axis_length);
@@ -3877,7 +3966,11 @@ var point_frag = [
 
 
 ReciprocalViewer.prototype.set_points = function () {
-  if (this.data == null) return;
+  if (this.data == null) { return; }
+  if (this.points != null) {
+    this.remove_and_dispose(this.points);
+    this.points = null;
+  }
   var pos = this.data.pos;
   var lattice_ids = this.data.lattice_ids;
   var color_arr = new Float32Array(3 * lattice_ids.length);
@@ -3921,26 +4014,26 @@ ReciprocalViewer.prototype.mousewheel_action = function (delta, evt) {
 };
 
 ReciprocalViewer.prototype.change_point_size = function (delta) {
-  if (this.points === null) return;
+  if (this.points === null) { return; }
   var size = this.points.material.uniforms.size;
   size.value = Math.max(size.value + delta, 0.5);
   this.hud('point size: ' + size.value.toFixed(1));
 };
 
 ReciprocalViewer.prototype.change_dmin = function (delta) {
-  if (this.d_min == null) return;
+  if (this.d_min == null) { return; }
   this.d_min = Math.max(this.d_min + delta, 0.1);
   var dmax = this.d_max_inv > 0 ? 1 / this.d_max_inv : null;
-  if (dmax !== null && this.d_min > dmax) this.d_min = dmax;
+  if (dmax !== null && this.d_min > dmax) { this.d_min = dmax; }
   this.points.material.uniforms.r2_max.value = 1 / (this.d_min * this.d_min);
   var low_res = dmax !== null ? dmax.toFixed(2) : '∞';
   this.hud('res. limit: ' + low_res + ' - ' + this.d_min.toFixed(2) + 'Å');
 };
 
 ReciprocalViewer.prototype.change_dmax = function (delta) {
-  if (this.d_min == null) return;
+  if (this.d_min == null) { return; }
   var v = Math.min(this.d_max_inv + delta, 1 / this.d_min);
-  if (v < 1e-6) v = 0;
+  if (v < 1e-6) { v = 0; }
   this.d_max_inv = v;
   this.points.material.uniforms.r2_min.value = v * v;
   var low_res = v > 0 ? (1 / v).toFixed(2) : '∞';
@@ -3948,7 +4041,7 @@ ReciprocalViewer.prototype.change_dmax = function (delta) {
 };
 
 ReciprocalViewer.prototype.redraw_models = function () {
-  if (this.points) this.remove_and_dispose(this.points);
+  if (this.points) { this.remove_and_dispose(this.points); }
   this.set_points();
 };
 
@@ -3968,12 +4061,11 @@ ReciprocalViewer.prototype.ColorSchemes = [
     lattices: [0xdc322f, 0x2aa198, 0x268bd2, 0x859900,
                0xd33682, 0xb58900, 0x6c71c4, 0xcb4b16],
     axes: [0xffaaaa, 0xaaffaa, 0xaaaaff],
-  },
-];
+  } ];
 
 exports.UnitCell = UnitCell;
 exports.Model = Model;
-exports.isosurface = isosurface;
+exports.Block = Block;
 exports.ElMap = ElMap;
 exports.makeCube = makeCube;
 exports.makeRgbBox = makeRgbBox;
