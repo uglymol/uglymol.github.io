@@ -44,8 +44,7 @@ export class Model {
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       const rec_type = line.substring(0, 6);
-      //+ is temporary: https://gitlab.com/Rich-Harris/buble/issues/159
-      if (rec_type === 'ATOM '+' ' || rec_type === 'HETATM') {
+      if (rec_type === 'ATOM  ' || rec_type === 'HETATM') {
         let new_atom = new Atom();
         new_atom.from_pdb_line(line);
         new_atom.i_seq = atom_i_seq++;
@@ -222,7 +221,7 @@ export class Model {
   }
 
   get_nearest_atom(x /*:number*/, y /*:number*/, z /*:number*/,
-                   atom_name /*:string*/) {
+                   atom_name /*:?string*/) {
     const cubes = this.cubes;
     if (cubes == null) throw Error('Missing Cubicles');
     const box_id = cubes.find_box_id(x, y, z);
@@ -231,8 +230,7 @@ export class Model {
     let min_d2 = Infinity;
     for (let i = 0; i < indices.length; i++) {
       const atom = this.atoms[indices[i]];
-      if (atom_name !== undefined && atom_name !== null &&
-          atom_name !== atom.name) continue;
+      if (atom_name != null && atom_name !== atom.name) continue;
       const dx = atom.xyz[0] - x;
       const dy = atom.xyz[1] - y;
       const dz = atom.xyz[2] - z;
@@ -254,14 +252,14 @@ class Atom {
   altloc: string
   resname: string
   chain: string
-  chain_index: ?number
+  chain_index: number
   resseq: number
   icode: ?string
   xyz: [number, number, number]
   occ: number
   b: number
   element: string
-  i_seq: ?number
+  i_seq: number
   is_ligand: ?boolean
   bonds: number[];
   */
@@ -271,14 +269,14 @@ class Atom {
     this.altloc = '';
     this.resname = '';
     this.chain = '';
-    this.chain_index = null;
+    this.chain_index = -1;
     this.resseq = -1;
     this.icode = null;
     this.xyz = [0, 0, 0];
     this.occ = 1.0;
     this.b = 0;
     this.element = '';
-    this.i_seq = null;
+    this.i_seq = -1;
     this.is_ligand = null;
     this.bonds = [];
   }
@@ -291,7 +289,7 @@ class Atom {
     const rec_type = pdb_line.substring(0, 6);
     if (rec_type === 'HETATM') {
       this.hetero = true;
-    } else if (rec_type !== 'ATOM '+' ') {
+    } else if (rec_type !== 'ATOM  ') {
       throw Error('Wrong record type: ' + rec_type);
     }
     this.name = pdb_line.substring(12, 16).trim();
@@ -400,6 +398,7 @@ class Atom {
     return a.name + ' /' + a.resseq + ' ' + a.resname + '/' + a.chain;
   }
 }
+/*:: export type AtomT = Atom; */
 
 
 // Partition atoms into boxes for quick neighbor searching.

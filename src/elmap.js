@@ -25,6 +25,10 @@ class GridArray {
     return this.dim[2] * (this.dim[1] * i + j) + k;
   }
 
+  grid2index_unchecked(i, j, k) {
+    return this.dim[2] * (this.dim[1] * i + j) + k;
+  }
+
   grid2frac(i, j, k) {
     return [i / this.dim[0], j / this.dim[1], k / this.dim[2]];
   }
@@ -68,6 +72,7 @@ export class ElMap {
   grid: ?GridArray
   stats: { mean: number, rms: number }
   block: Block
+  unit: string
   */
   constructor() {
     this.unit_cell = null;
@@ -265,20 +270,16 @@ export class ElMap {
 
   // Extract a block of density for calculating an isosurface using the
   // separate marching cubes implementation.
-  extract_block(radius/*:number*/, center /*:?number[]*/) {
+  extract_block(radius/*:number*/, center /*:[number,number,number]*/) {
     const grid = this.grid;
     const unit_cell = this.unit_cell;
     if (grid == null || unit_cell == null) return;
-    let grid_min = [0, 0, 0];
-    let grid_max = grid.dim;
-    if (center) {
-      const xyz_min = [center[0]-radius, center[1]-radius, center[2]-radius];
-      const xyz_max = [center[0]+radius, center[1]+radius, center[2]+radius];
-      const frac_min = unit_cell.fractionalize(xyz_min);
-      const frac_max = unit_cell.fractionalize(xyz_max);
-      grid_min = grid.frac2grid(frac_min);
-      grid_max = grid.frac2grid(frac_max);
-    }
+    const xyz_min = [center[0]-radius, center[1]-radius, center[2]-radius];
+    const xyz_max = [center[0]+radius, center[1]+radius, center[2]+radius];
+    const frac_min = unit_cell.fractionalize(xyz_min);
+    const frac_max = unit_cell.fractionalize(xyz_max);
+    const grid_min = grid.frac2grid(frac_min);
+    const grid_max = grid.frac2grid(frac_max);
     const size = [grid_max[0] - grid_min[0] + 1,
                   grid_max[1] - grid_min[1] + 1,
                   grid_max[2] - grid_min[2] + 1];
@@ -303,6 +304,8 @@ export class ElMap {
     return this.block.isosurface(abs_level, method);
   }
 }
+
+ElMap.prototype.unit = 'e/\u212B\u00B3';
 
 // symop -> matrix ([x,y,z] = matrix * [x,y,z,1])
 function parse_symop(symop) {

@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 
 /*:: type Num3 = [number, number, number] */
-/*:: type Atom = {xyz: Num3} */
+/*:: import type {AtomT} from './model.js' */
 /*:: type Color = {r: number, g: number, b: number} */
 /*:: type Vector3 = {x: number, y: number, z: number} */
 
@@ -62,7 +62,7 @@ export function makeRgbBox(transform_func /*:Num3 => Num3*/,
   return makeLineSegments(material, vertices, colors);
 }
 
-function double_pos(vertex_arr /*:Vector3[] | Atom[]*/) {
+function double_pos(vertex_arr /*:Vector3[] | AtomT[]*/) {
   let pos = [];
   let i;
   if (vertex_arr && vertex_arr[0].xyz) {
@@ -261,7 +261,7 @@ function interpolate_directions(dirs, smooth) {
   return ret;
 }
 
-function make_uniforms(params) {
+export function makeUniforms(params/*:{[id:string]:mixed}*/) {
   let uniforms = {
     fogNear: { value: null },  // will be updated in setProgram()
     fogFar: { value: null },
@@ -292,7 +292,7 @@ const ribbon_frag = [
   '}'].join('\n');
 
 // 9-line ribbon
-export function makeRibbon(vertices /*:Atom[]*/,
+export function makeRibbon(vertices /*:AtomT[]*/,
                            colors /*:Color[]*/,
                            tangents /*:Num3[]*/,
                            smoothness /*:number*/) {
@@ -305,7 +305,7 @@ export function makeRibbon(vertices /*:Atom[]*/,
   // it's not 'normal', but it doesn't matter
   geometry.addAttribute('normal', new THREE.BufferAttribute(tan, 3));
   const material0 = new THREE.ShaderMaterial({
-    uniforms: make_uniforms({shift: 0}),
+    uniforms: makeUniforms({shift: 0}),
     vertexShader: ribbon_vert,
     fragmentShader: ribbon_frag,
     fog: true,
@@ -379,7 +379,7 @@ export function makeGrid() {
   geom.addAttribute('position',
                     new THREE.BufferAttribute(new Float32Array(pos), 3));
   let material = new THREE.ShaderMaterial({
-    uniforms: make_uniforms({ucolor: new THREE.Color(0x888888)}),
+    uniforms: makeUniforms({ucolor: new THREE.Color(0x888888)}),
     //linewidth: 3,
     vertexShader: grid_vert,
     fragmentShader: grid_frag,
@@ -405,7 +405,7 @@ function makeSimpleLineMaterial(options) {
 }
 
 function makeThickLineMaterial(options) {
-  let uniforms = make_uniforms({
+  let uniforms = makeUniforms({
     linewidth: options.linewidth,
     win_size: options.win_size,
   });
@@ -423,7 +423,7 @@ export function makeLineMaterial(options /*:{[key: string]: mixed}*/) {
                           : makeThickLineMaterial(options);
 }
 
-function makeSimpleGeometry(vertices /*:Vector3[] | Atom[]*/,
+function makeSimpleGeometry(vertices /*:Vector3[] | AtomT[]*/,
                             colors /*:?Color[]*/) {
   let geometry = new THREE.BufferGeometry();
   const pos = new Float32Array(vertices.length * 3);
@@ -467,7 +467,7 @@ function makeThickLine(material, vertices, colors) {
 }
 
 export function makeLine(material /*:THREE.Material*/,
-                         vertices /*:Vector3[]*/,
+                         vertices /*:AtomT[]*/,
                          colors /*:Color[]*/) {
   if (material.isShaderMaterial) {
     return makeThickLine(material, vertices, colors);
@@ -483,7 +483,7 @@ function makeThickLineSegments(material, vertices, colors) {
 }
 
 export function makeLineSegments(material /*:THREE.Material*/,
-                                 vertices /*:Vector3[] | Atom[]*/,
+                                 vertices /*:Vector3[] | AtomT[]*/,
                                  colors /*:?Color[]*/) {
   if (material.isShaderMaterial) {
     return makeThickLineSegments(material, vertices, colors);
@@ -513,12 +513,12 @@ const wheel_frag = [
   '#include <fog_fragment>',
   '}'].join('\n');
 
-export function makeWheels(atom_arr /*:Atom[]*/,
+export function makeWheels(atom_arr /*:AtomT[]*/,
                            color_arr /*:Color[]*/,
                            size /*:number*/) {
   let geometry = makeSimpleGeometry(atom_arr, color_arr);
   let material = new THREE.ShaderMaterial({
-    uniforms: make_uniforms({size: size}),
+    uniforms: makeUniforms({size: size}),
     vertexShader: wheel_vert,
     fragmentShader: wheel_frag,
     fog: true,
@@ -620,9 +620,9 @@ export function makeLabel(text /*:string*/, options /*:{[key:string]: any}*/) {
   geometry.addAttribute('uv', new THREE.BufferAttribute(uvs, 2));
 
   let material = new THREE.ShaderMaterial({
-    uniforms: make_uniforms({map: texture,
-                             canvas_size: [canvas.width, canvas.height],
-                             win_size: options.win_size}),
+    uniforms: makeUniforms({map: texture,
+                            canvas_size: [canvas.width, canvas.height],
+                            win_size: options.win_size}),
     vertexShader: label_vert,
     fragmentShader: label_frag,
     fog: true,
