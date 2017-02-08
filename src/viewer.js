@@ -189,16 +189,17 @@ class MapBag {
 class ModelBag {
   /*::
   model: Model
-  name: string
+  label: string
   visible: boolean
   hue_shift: number
   conf: Object
   win_size: [number, number]
   atomic_objects: Object[]
+  static ctor_counter: number
   */
   constructor(model, config, win_size) {
     this.model = model;
-    this.name = '';
+    this.label = '(model #' + ++ModelBag.ctor_counter + ')';
     this.visible = true;
     this.hue_shift = 0;
     this.conf = config;
@@ -325,6 +326,8 @@ class ModelBag {
     }
   }
 }
+
+ModelBag.ctor_counter = 0;
 
 function vec3_to_fixed(vec, n) {
   return [vec.x.toFixed(n), vec.y.toFixed(n), vec.z.toFixed(n)];
@@ -1048,10 +1051,6 @@ export class Viewer {
       this.select_next('bond lines', 'line_style', LINE_STYLES, evt.shiftKey);
       this.redraw_models();
     };
-    // 3, numpad 3
-    kb[51] = kb[99] = function () { this.shift_clip(1); };
-    // numpad period (Linux), decimal point (Mac)
-    kb[108] = kb[110] = function () { this.shift_clip(-1); };
     // shift, ctrl, alt, altgr
     kb[16] = kb[17] = kb[18] = kb[225] = function () {};
     // slash, single quote
@@ -1100,6 +1099,10 @@ export class Viewer {
                ' hydrogens (if any)');
       this.redraw_models();
     };
+    // comma
+    kb[188] = function (evt) { if (evt.shiftKey) this.shift_clip(1); };
+    // period
+    kb[190] = function (evt) { if (evt.shiftKey) this.shift_clip(-1); };
   }
 
   mousedown(event/*:MouseEvent*/) {
@@ -1138,7 +1141,7 @@ export class Viewer {
     const pick = this.pick_atom(mouse, this.camera);
     if (pick) {
       const atom = pick.atom;
-      this.hud(atom.long_label());
+      this.hud(pick.bag.label + ' ' + atom.long_label());
       this.toggle_label(pick);
       const color = this.config.colors[atom.element] || this.config.colors.def;
       const size = 2.5 * scale_by_height(this.config.bond_line,
@@ -1256,7 +1259,7 @@ export class Viewer {
   }
 
   select_atom(pick/*:{bag:ModelBag, atom:AtomT}*/, options/*:Object*/={}) {
-    this.hud('-> ' + pick.atom.long_label());
+    this.hud('-> ' + pick.bag.label + ' ' + pick.atom.long_label());
     this.controls.go_to(pick.atom.xyz, null, null, options.steps);
     this.toggle_label(this.selected, false);
     this.selected = {bag: pick.bag, atom: pick.atom}; // not ...=pick b/c flow
@@ -1432,7 +1435,7 @@ export class Viewer {
     const url = window.location.href;
     const match = url.match(/[?&]id=([^&#]+)/);
     if (match == null) return;
-    const id = match[1];
+    const id = match[1].toLowerCase();
     this.load_pdb('https://www.ebi.ac.uk/pdbe/entry-files/pdb' + id + '.ent');
   }
 
@@ -1478,7 +1481,7 @@ Viewer.prototype.KEYBOARD_HELP = [
   '+/- = sigma level',
   ']/[ = map radius',
   'D/F = clip width',
-  'numpad 3/. = move clip',
+  '&lt;/> = move clip',
   'M/N = zoom',
   'U = unitcell box',
   'Y = hydrogens',
@@ -1495,7 +1498,9 @@ Viewer.prototype.KEYBOARD_HELP = [
 ].join('\n');
 
 Viewer.prototype.ABOUT_HELP =
-  '<a href="https://uglymol.github.io">about uglymol</a>';
+  '&nbsp; <a href="https://uglymol.github.io">uglymol</a> ' +
+  // $FlowFixMe
+  (typeof VERSION === 'string' ? VERSION : 'dev'); // eslint-disable-line
 
 Viewer.prototype.ColorSchemes = ColorSchemes;
 
