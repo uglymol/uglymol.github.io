@@ -1342,7 +1342,8 @@ export class Viewer {
     req.onreadystatechange = function () {
       if (req.readyState === 4) {
         // chrome --allow-file-access-from-files gives status 0
-        if (req.status === 200 || (req.status === 0 && req.response !== null)) {
+        if (req.status === 200 || (req.status === 0 && req.response !== null &&
+                                                       req.response !== '')) {
           try {
             callback(req);
           } catch (e) {
@@ -1391,7 +1392,11 @@ export class Viewer {
     });
   }
 
-  load_map(url/*:string*/, options/*:Object*/, callback/*:?Function*/) {
+  load_map(url/*:?string*/, options/*:Object*/, callback/*:?Function*/) {
+    if (url == null) {
+      if (callback) callback();
+      return;
+    }
     if (options.format !== 'ccp4' && options.format !== 'dsn6') {
       throw Error('Unknown map format.');
     }
