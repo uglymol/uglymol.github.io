@@ -1,5 +1,5 @@
 /*!
- * UglyMol v0.5.5. Macromolecular Viewer for Crystallographers.
+ * UglyMol v0.5.7. Macromolecular Viewer for Crystallographers.
  * Copyright 2014 Nat Echols
  * Copyright 2016 Diamond Light Source Ltd
  * Copyright 2016 Marcin Wojdyr
@@ -8,10 +8,10 @@
 (function (global, factory) {
 	typeof exports === 'object' && typeof module !== 'undefined' ? factory(exports, require('three')) :
 	typeof define === 'function' && define.amd ? define(['exports', 'three'], factory) :
-	(factory((global.UM = global.UM || {}),global.THREE));
+	(factory((global.UM = {}),global.THREE));
 }(this, (function (exports,THREE) { 'use strict';
 
-var VERSION = exports.VERSION = '0.5.5';
+var VERSION = exports.VERSION = '0.5.7';
 
 
 // @flow
@@ -1462,12 +1462,12 @@ ElMap.prototype.extract_block = function extract_block (radius/*:number*/, cente
   var grid = this.grid;
   var unit_cell = this.unit_cell;
   if (grid == null || unit_cell == null) { return; }
-  var xyz_min = [center[0]-radius, center[1]-radius, center[2]-radius];
-  var xyz_max = [center[0]+radius, center[1]+radius, center[2]+radius];
-  var frac_min = unit_cell.fractionalize(xyz_min);
-  var frac_max = unit_cell.fractionalize(xyz_max);
-  var grid_min = grid.frac2grid(frac_min);
-  var grid_max = grid.frac2grid(frac_max);
+  var fc = unit_cell.fractionalize(center);
+  var r = [radius / unit_cell.parameters[0],
+             radius / unit_cell.parameters[1],
+             radius / unit_cell.parameters[2]];
+  var grid_min = grid.frac2grid([fc[0] - r[0], fc[1] - r[1], fc[2] - r[2]]);
+  var grid_max = grid.frac2grid([fc[0] + r[0], fc[1] + r[1], fc[2] + r[2]]);
   var size = [grid_max[0] - grid_min[0] + 1,
                 grid_max[1] - grid_min[1] + 1,
                 grid_max[2] - grid_min[2] + 1];
@@ -2686,13 +2686,13 @@ ModelBag.prototype.add_ribbon = function add_ribbon (smoothness) {
   var colors = color_by(this.conf.color_aim, visible_atoms,
                           this.conf.colors, this.hue_shift);
   var k = 0;
-  for (var i = 0, list = segments; i < list.length; i += 1) {
-    var seg = list[i];
+  for (var i$1 = 0, list$1 = segments; i$1 < list$1.length; i$1 += 1) {
+    var seg = list$1[i$1];
 
       var tangents = [];
     var last = [0, 0, 0];
-    for (var i$1 = 0, list$1 = seg; i$1 < list$1.length; i$1 += 1) {
-      var atom = list$1[i$1];
+    for (var i = 0, list = seg; i < list.length; i += 1) {
+      var atom = list[i];
 
         var residue = res_map[atom.resid()];
       var tang = this.model.calculate_tangent_vector(residue);
@@ -2755,6 +2755,7 @@ var Viewer = function Viewer(options /*: {[key: string]: any}*/) {
                  mark: null };
   this.labels = {};
   this.nav = null;
+  this.xhr_headers = {};
 
   this.config = {
     bond_line: 4.0, // ~ to height, like in Coot (see scale_by_height())
@@ -3230,7 +3231,6 @@ Viewer.prototype.toggle_full_screen = function toggle_full_screen () {
     var req = el.requestFullscreen || el.webkitRequestFullscreen ||
     // $FlowFixMe: property `msRequestFullscreen` not found in HTMLElement
               el.mozRequestFullScreen || el.msRequestFullscreen;
-    // $FlowFixMe
     if (req) { req.call(el); }
   }
 };
@@ -3594,13 +3594,13 @@ Viewer.prototype.recenter = function recenter (xyz/*:?Num3*/, cam/*:?Num3*/, ste
   if (xyz != null && cam == null && bag != null) {
     // look from specified point toward the center of the molecule,
     // i.e. shift camera away from the molecule center.
-    xyz = new THREE.Vector3(xyz[0], xyz[1], xyz[2]);
     var mc = bag.model.get_center();
     var d = new THREE.Vector3(xyz[0] - mc[0], xyz[1] - mc[1], xyz[2] - mc[2]);
     d.setLength(100);
     new_up = d.y < 90 ? new THREE.Vector3(0, 1, 0)
                       : new THREE.Vector3(1, 0, 0);
     new_up.projectOnPlane(d).normalize();
+    xyz = new THREE.Vector3(xyz[0], xyz[1], xyz[2]);
     cam = d.add(xyz);
   } else {
     xyz = xyz || (bag ? bag.model.get_center() : [0, 0, 0]);
@@ -3708,6 +3708,11 @@ Viewer.prototype.load_file = function load_file (url/*:string*/, options/*:{[id:
   } else {
     // http://stackoverflow.com/questions/7374911/
     req.overrideMimeType('text/plain');
+  }
+  for (var name in this.xhr_headers) {
+    if (this.xhr_headers.hasOwnProperty(name)) {
+      req.setRequestHeader(name, this.xhr_headers[name]);
+    }
   }
   var self = this;
   req.onreadystatechange = function () {
@@ -4325,10 +4330,11 @@ ReciprocalViewer.prototype.KEYBOARD_HELP = [
   'Shift+P = permalink',
   'Shift+F = full screen',
   '←/→ = max resol.',
-  '↑/↓ = min resol.' ].join('\n');
+  '↑/↓ = min resol.',
+  '+/- = map level' ].join('\n');
 
-ReciprocalViewer.prototype.MOUSE_HELP = Viewer.prototype.MOUSE_HELP
-                                        .split('\n').slice(0, -2).join('\n');
+ReciprocalViewer.prototype.MOUSE_HELP =
+    Viewer.prototype.MOUSE_HELP.split('\n').slice(0, -2).join('\n');
 
 exports.UnitCell = UnitCell;
 exports.modelsFromPDB = modelsFromPDB;

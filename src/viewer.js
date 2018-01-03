@@ -370,6 +370,7 @@ export class Viewer {
           mark: ?Object}
   labels: {[id:string]: {o: THREE.Mesh, bag: ModelBag}}
   nav: ?Object
+  xhr_headers: {[id:string]: string}
   config: Object
   window_size: [number, number]
   window_offset: [number, number]
@@ -406,6 +407,7 @@ export class Viewer {
                    mark: null };
     this.labels = {};
     this.nav = null;
+    this.xhr_headers = {};
 
     this.config = {
       bond_line: 4.0, // ~ to height, like in Coot (see scale_by_height())
@@ -863,7 +865,6 @@ export class Viewer {
       let req = el.requestFullscreen || el.webkitRequestFullscreen ||
       // $FlowFixMe: property `msRequestFullscreen` not found in HTMLElement
                 el.mozRequestFullScreen || el.msRequestFullscreen;
-      // $FlowFixMe
       if (req) req.call(el);
     }
   }
@@ -1227,13 +1228,13 @@ export class Viewer {
     if (xyz != null && cam == null && bag != null) {
       // look from specified point toward the center of the molecule,
       // i.e. shift camera away from the molecule center.
-      xyz = new THREE.Vector3(xyz[0], xyz[1], xyz[2]);
       const mc = bag.model.get_center();
       let d = new THREE.Vector3(xyz[0] - mc[0], xyz[1] - mc[1], xyz[2] - mc[2]);
       d.setLength(100);
       new_up = d.y < 90 ? new THREE.Vector3(0, 1, 0)
                         : new THREE.Vector3(1, 0, 0);
       new_up.projectOnPlane(d).normalize();
+      xyz = new THREE.Vector3(xyz[0], xyz[1], xyz[2]);
       cam = d.add(xyz);
     } else {
       xyz = xyz || (bag ? bag.model.get_center() : [0, 0, 0]);
@@ -1337,6 +1338,11 @@ export class Viewer {
     } else {
       // http://stackoverflow.com/questions/7374911/
       req.overrideMimeType('text/plain');
+    }
+    for (const name in this.xhr_headers) {
+      if (this.xhr_headers.hasOwnProperty(name)) {
+        req.setRequestHeader(name, this.xhr_headers[name]);
+      }
     }
     let self = this;
     req.onreadystatechange = function () {
