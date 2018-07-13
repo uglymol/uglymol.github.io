@@ -185,7 +185,10 @@ export class ReciprocalViewer extends Viewer {
     this.config.spot_shape = SPOT_SHAPES[0];
     this.config.center_cube_size = 0.001;
     this.set_reciprocal_key_bindings();
-    this.set_dropzone();
+    if (typeof document !== 'undefined') {
+      this.set_dropzone(this.renderer.domElement,
+                        this.file_drop_callback.bind(this));
+    }
     this.point_material = new THREE.ShaderMaterial({
       uniforms: makeUniforms({
         size: 3,
@@ -228,7 +231,7 @@ export class ReciprocalViewer extends Viewer {
     };
     // u
     kb[85] = function () {
-      if (this.map_bags.length == 0) {
+      if (this.map_bags.length === 0) {
         this.hud('Reciprocal-space density map not loaded.');
         return;
       }
@@ -275,54 +278,39 @@ export class ReciprocalViewer extends Viewer {
     kb[221] = function () { this.change_map_radius(0.001); };
   }
 
-  set_dropzone() {
-    if (typeof document === 'undefined') return;  // for testing on node
-    const zone = this.renderer.domElement;
-    const self = this;
-    zone.addEventListener('dragover', function (e) {
-      e.stopPropagation();
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'copy';
-      self.hud('ready for drop...');
-    });
-    zone.addEventListener('drop', function (e) {
-      e.stopPropagation();
-      e.preventDefault();
-      let names = [];
-      for (const file of e.dataTransfer.files) {
-        const reader = new FileReader();
-        if (/\.(map|ccp4)$/.test(file.name)) {
-          reader.onloadend = function (evt) {
-            if (evt.target.readyState == 2) {
-              self.load_map_from_ab(evt.target.result);
-            }
-          };
-          reader.readAsArrayBuffer(file);
-        } else {
-          reader.onload = function (evt) {
-            self.load_from_string(evt.target.result, {});
-          };
-          reader.readAsText(file);
+  file_drop_callback(file/*:File*/) {
+    const reader = new FileReader();
+    if (/\.(map|ccp4)$/.test(file.name)) {
+      reader.onloadend = function (evt) {
+        if (evt.target.readyState == 2) {
+          self.load_map_from_ab(evt.target.result);
         }
-        names.push(file.name);
-      }
-      self.hud('loading ' + names.join(', '));
-    });
+      };
+      reader.readAsArrayBuffer(file);
+    } else {
+      reader.onload = function (evt) {
+        self.load_from_string(evt.target.result, {});
+      };
+      reader.readAsText(file);
+    }
   }
 
   load_data(url/*:string*/, options/*:Object*/ = {}) {
     let self = this;
     this.load_file(url, {binary: false, progress: true}, function (req) {
-      self.load_from_string(req.responseText, options);
-      if (options.callback) options.callback();
+      let ok = self.load_from_string(req.responseText, options);
+      if (ok && options.callback) options.callback();
     });
   }
 
   load_from_string(text/*:string*/, options/*:Object*/) {
     if (text[0] === '{') {
       this.data = parse_json(text);
-    } else {
+    } else if (text[0] === '#') {
       this.data = parse_csv(text);
+    } else {
+      this.hud('Unrecognized file type.');
+      return false;
     }
     this.max_dist = find_max_dist(this.data.pos);
     this.d_min = 1 / this.max_dist;
@@ -339,6 +327,7 @@ export class ReciprocalViewer extends Viewer {
     this.controls.slab_width = [d, d, 100];
     this.set_view(options);
     this.hud('Loaded ' + this.data.pos.length + ' spots.');
+    return true;
   }
 
   load_map_from_ab(buffer/*:ArrayBuffer*/) {
@@ -446,7 +435,7 @@ export class ReciprocalViewer extends Viewer {
   }
 
   get_cell_box_func() {
-    if (this.map_bags.size === 0) return null;
+    if (this.map_bags.length === 0) return null;
     // $FlowFixMe: here the map is ReciprocalSpaceMap not ElMap
     const a = this.map_bags[0].map.box_size;
     return function (xyz/*:[number,number,number]*/) {

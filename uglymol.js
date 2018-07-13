@@ -1,17 +1,17 @@
 /*!
- * UglyMol v0.5.7. Macromolecular Viewer for Crystallographers.
+ * UglyMol v0.5.8. Macromolecular Viewer for Crystallographers.
  * Copyright 2014 Nat Echols
  * Copyright 2016 Diamond Light Source Ltd
  * Copyright 2016 Marcin Wojdyr
  * Released under the MIT License.
  */
 (function (global, factory) {
-	typeof exports === 'object' && typeof module !== 'undefined' ? factory(exports, require('three')) :
-	typeof define === 'function' && define.amd ? define(['exports', 'three'], factory) :
-	(factory((global.UM = {}),global.THREE));
+typeof exports === 'object' && typeof module !== 'undefined' ? factory(exports, require('three')) :
+typeof define === 'function' && define.amd ? define(['exports', 'three'], factory) :
+(factory((global.UM = {}),global.THREE));
 }(this, (function (exports,THREE) { 'use strict';
 
-var VERSION = exports.VERSION = '0.5.7';
+var VERSION = exports.VERSION = '0.5.8';
 
 
 // @flow
@@ -113,11 +113,10 @@ var Model = function Model() {
   this.cubes = null;
 };
 
-Model.prototype.from_pdb = function from_pdb (pdb_lines /*:string[]*/) {
+Model.prototype.from_pdb = function from_pdb (pdb_lines /*:string[]*/) /*:?string[]*/ {
   var chain_index = 0;// will be ++'ed for the first atom
   var last_chain = null;
   var atom_i_seq = 0;
-  //let last_atom = null;
   var continuation = null;
   for (var i = 0; i < pdb_lines.length; i++) {
     var line = pdb_lines[i];
@@ -134,11 +133,8 @@ Model.prototype.from_pdb = function from_pdb (pdb_lines /*:string[]*/) {
       }
       new_atom.chain_index = chain_index;
       last_chain = new_atom.chain;
-      //last_atom = new_atom;
       this.atoms.push(new_atom);
-    } else if (rec_type === 'ANISOU') {
-      //last_atom.set_uij_from_anisou(line);
-    } else if (rec_type === 'CRYST1') {
+    } else if (rec_type === 'ANISOU') ; else if (rec_type === 'CRYST1') {
       var a = parseFloat(line.substring(6, 15));
       var b = parseFloat(line.substring(15, 24));
       var c = parseFloat(line.substring(24, 33));
@@ -1297,7 +1293,7 @@ ElMap.prototype.from_ccp4 = function from_ccp4 (buf /*:ArrayBuffer*/, expand_sym
   if (1024 + nsymbt + nb*n_crs[0]*n_crs[1]*n_crs[2] !== buf.byteLength) {
     throw Error('ccp4 file too short or too long');
   }
-  var fview = new Float32Array(buf, 0, buf.byteLength >> 2);
+  var fview = new Float32Array(buf, 0, buf.byteLength / 4);
   this.unit_cell = new UnitCell(fview[10], fview[11], fview[12],
                                 fview[13], fview[14], fview[15]);
   // MAPC, MAPR, MAPS - axis corresp to cols, rows, sections (1,2,3 for X,Y,Z)
@@ -2800,20 +2796,21 @@ var Viewer = function Viewer(options /*: {[key: string]: any}*/) {
   if (this.constructor === Viewer) { this.set_real_space_key_bindings(); }
   if (typeof document === 'undefined') { return; }// for testing on node
 
-  try {
-    this.renderer = new THREE.WebGLRenderer({antialias: true});
-  } catch (e) {
-    this.hud('no WebGL in your browser?', 'ERR');
-    this.renderer = null;
-    return;
-  }
-
   function get_elem(name) {
     if (options[name] === null) { return null; }
     return document.getElementById(options[name] || name);
   }
-  this.container = get_elem('viewer');
   this.hud_el = get_elem('hud');
+
+  try {
+    this.renderer = new THREE.WebGLRenderer({antialias: true});
+  } catch (e) {
+    this.hud('No WebGL in your browser?', 'ERR');
+    this.renderer = null;
+    return;
+  }
+
+  this.container = get_elem('viewer');
   this.help_el = get_elem('help');
   if (this.hud_el) {
     this.initial_hud_html = this.hud_el.innerHTML;
@@ -3218,8 +3215,11 @@ Viewer.prototype.change_map_line = function change_map_line (delta/*:number*/) {
 
 Viewer.prototype.toggle_full_screen = function toggle_full_screen () {
   var d = document;
+  // $FlowFixMe: Property mozFullScreenElement is missing in Document
   if (d.fullscreenElement || d.mozFullScreenElement ||
+      // $FlowFixMe: Property webkitExitFullscreen is missing in Document
       d.webkitFullscreenElement || d.msFullscreenElement) {
+    // $FlowFixMe: Property webkitExitFullscreen is missing in Document
     var ex = d.exitFullscreen || d.webkitExitFullscreen ||
     // $FlowFixMe: property `msExitFullscreen` not found in document
              d.mozCancelFullScreen || d.msExitFullscreen;
@@ -3228,6 +3228,7 @@ Viewer.prototype.toggle_full_screen = function toggle_full_screen () {
   } else {
     var el = this.container;
     if (!el) { return; }
+    // $FlowFixMe: Property webkitRequestFullscreen is missing in HTMLElement
     var req = el.requestFullscreen || el.webkitRequestFullscreen ||
     // $FlowFixMe: property `msRequestFullscreen` not found in HTMLElement
               el.mozRequestFullScreen || el.msRequestFullscreen;
@@ -3588,7 +3589,7 @@ Viewer.prototype.resize = function resize (/*evt*/) {
 
 // If xyz set recenter on it looking toward the model center.
 // Otherwise recenter on the model center looking along the z axis.
-Viewer.prototype.recenter = function recenter (xyz/*:?Num3*/, cam/*:?Num3*/, steps/*:number*/) {
+Viewer.prototype.recenter = function recenter (xyz/*:?Num3*/, cam/*:?Num3*/, steps/*:?number*/) {
   var bag = this.selected.bag;
   var new_up;
   if (xyz != null && cam == null && bag != null) {
@@ -3603,7 +3604,14 @@ Viewer.prototype.recenter = function recenter (xyz/*:?Num3*/, cam/*:?Num3*/, ste
     xyz = new THREE.Vector3(xyz[0], xyz[1], xyz[2]);
     cam = d.add(xyz);
   } else {
-    xyz = xyz || (bag ? bag.model.get_center() : [0, 0, 0]);
+    if (xyz == null) {
+      if (bag != null) {
+        xyz = bag.model.get_center();
+      } else {
+        var uc_func = this.get_cell_box_func();
+        xyz = uc_func ? uc_func([0.5, 0.5, 0.5]) : [0, 0, 0];
+      }
+    }
     if (cam != null) {
       cam = new THREE.Vector3(cam[0], cam[1], cam[2]);
       new_up = null; // preserve the up direction
@@ -3723,7 +3731,7 @@ Viewer.prototype.load_file = function load_file (url/*:string*/, options/*:{[id:
         try {
           callback(req);
         } catch (e) {
-          self.hud('Error: ' + e.message + '\nin ' + url, 'ERR');
+          self.hud('Error: ' + e.message + '\nwhen processing ' + url, 'ERR');
         }
       } else {
         self.hud('Failed to fetch ' + url, 'ERR');
@@ -3734,8 +3742,8 @@ Viewer.prototype.load_file = function load_file (url/*:string*/, options/*:{[id:
     req.addEventListener('progress', function (evt /*:ProgressEvent*/) {
       if (evt.lengthComputable && evt.loaded && evt.total) {
         var fn = url.split('/').pop();
-        self.hud('loading ' + fn + ' ... ' +
-                 (evt.loaded >> 10) + ' / ' + (evt.total >> 10) + ' kB');
+        self.hud('loading ' + fn + ' ... ' + ((evt.loaded / 1024) | 0) +
+                 ' / ' + ((evt.total / 1024) | 0) + ' kB');
         if (evt.loaded === evt.total) { self.hud(); } // clear progress message
       }
     });
@@ -3747,6 +3755,61 @@ Viewer.prototype.load_file = function load_file (url/*:string*/, options/*:{[id:
   }
 };
 
+Viewer.prototype.set_dropzone = function set_dropzone (zone/*:Object*/, callback/*:Function*/) {
+  var self = this;
+  zone.addEventListener('dragover', function (e) {
+    e.stopPropagation();
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    self.hud('ready for file drop...');
+  });
+  zone.addEventListener('drop', function (e) {
+    e.stopPropagation();
+    e.preventDefault();
+    var names = [];
+    for (var i = 0, list = e.dataTransfer.files; i < list.length; i += 1) {
+      var file = list[i];
+
+        try {
+        callback(file);
+      } catch (e) {
+        self.hud('Loading ' + file.name + ' failed.\n' + e.message, 'ERR');
+        return;
+      }
+      names.push(file.name);
+    }
+    self.hud('loading ' + names.join(', '));
+  });
+};
+
+Viewer.prototype.set_pdb_and_map_dropzone = function set_pdb_and_map_dropzone (zone/*:Object*/) {
+  var self = this;
+  this.set_dropzone(zone, function (file) {
+    var reader = new FileReader();
+    if (/\.(pdb|ent)$/.test(file.name)) {
+      reader.onload = function (evt) {
+        self.load_pdb_from_text(evt.target.result);
+        self.recenter();
+      };
+      reader.readAsText(file);
+    } else if (/\.(map|ccp4|dsn6|omap)$/.test(file.name)) {
+      var map_format = /\.(dsn6|omap)$/.test(file.name) ? 'dsn6' : 'ccp4';
+      reader.onloadend = function (evt) {
+        if (evt.target.readyState == 2) {
+          self.load_map_from_buffer(evt.target.result, {format: map_format});
+          if (self.model_bags.length === 0 && self.map_bags.length === 1) {
+            self.recenter();
+          }
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    } else {
+      throw Error('Unknown file extension. ' +
+                  'Use: pdb, ent, ccp4, map, dsn6 or omap.');
+    }
+  });
+};
+
 Viewer.prototype.set_view = function set_view (options/*:?Object*/) {
   var frag = parse_url_fragment();
   if (frag.zoom) { this.camera.zoom = frag.zoom; }
@@ -3754,17 +3817,21 @@ Viewer.prototype.set_view = function set_view (options/*:?Object*/) {
 };
 
 // Load molecular model from PDB file and centers the view
+Viewer.prototype.load_pdb_from_text = function load_pdb_from_text (text/*:string*/) {
+  var len = this.model_bags.length;
+  var models = modelsFromPDB(text);
+  for (var i = 0, list = models; i < list.length; i += 1) {
+    var model = list[i];
+
+      this.add_model(model);
+  }
+  this.selected.bag = this.model_bags[len];
+};
+
 Viewer.prototype.load_pdb = function load_pdb (url/*:string*/, options/*:?Object*/, callback/*:?Function*/) {
   var self = this;
   this.load_file(url, {binary: false}, function (req) {
-    var len = self.model_bags.length;
-    var models = modelsFromPDB(req.responseText);
-    for (var i = 0, list = models; i < list.length; i += 1) {
-      var model = list[i];
-
-        self.add_model(model);
-    }
-    self.selected.bag = self.model_bags[len];
+    self.load_pdb_from_text(req.responseText);
     self.set_view(options);
     if (callback) { callback(); }
   });
@@ -3814,12 +3881,13 @@ Viewer.prototype.load_pdb_and_ccp4_maps = function load_pdb_and_ccp4_maps (pdb/*
 };
 
 Viewer.prototype.load_from_pdbe = function load_from_pdbe () {
-  if (typeof window === 'undefined') { return; }
+  if (typeof window === 'undefined') { return false; }
   var url = window.location.href;
   var match = url.match(/[?&]id=([^&#]+)/);
-  if (match == null) { return; }
+  if (match == null) { return false; }
   var id = match[1].toLowerCase();
   this.load_pdb('https://www.ebi.ac.uk/pdbe/entry-files/pdb' + id + '.ent');
+  return true;
 };
 
 Viewer.prototype.MOUSE_HELP = [
@@ -3866,6 +3934,8 @@ Viewer.prototype.ABOUT_HELP =
 Viewer.prototype.ColorSchemes = ColorSchemes;
 
 // @flow
+
+
 // options handled by Viewer#select_next()
 var SPOT_SEL = ['all', 'unindexed', '#1']; //extended when needed
 var SHOW_AXES = ['two', 'three', 'none'];
@@ -4011,7 +4081,10 @@ var ReciprocalViewer = (function (Viewer$$1) {
     this.config.spot_shape = SPOT_SHAPES[0];
     this.config.center_cube_size = 0.001;
     this.set_reciprocal_key_bindings();
-    this.set_dropzone();
+    if (typeof document !== 'undefined') {
+      this.set_dropzone(this.renderer.domElement,
+                        this.file_drop_callback.bind(this));
+    }
     this.point_material = new THREE.ShaderMaterial({
       uniforms: makeUniforms({
         size: 3,
@@ -4058,7 +4131,7 @@ var ReciprocalViewer = (function (Viewer$$1) {
     };
     // u
     kb[85] = function () {
-      if (this.map_bags.length == 0) {
+      if (this.map_bags.length === 0) {
         this.hud('Reciprocal-space density map not loaded.');
         return;
       }
@@ -4105,41 +4178,21 @@ var ReciprocalViewer = (function (Viewer$$1) {
     kb[221] = function () { this.change_map_radius(0.001); };
   };
 
-  ReciprocalViewer.prototype.set_dropzone = function set_dropzone () {
-    if (typeof document === 'undefined') { return; }  // for testing on node
-    var zone = this.renderer.domElement;
-    var self = this;
-    zone.addEventListener('dragover', function (e) {
-      e.stopPropagation();
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'copy';
-      self.hud('ready for drop...');
-    });
-    zone.addEventListener('drop', function (e) {
-      e.stopPropagation();
-      e.preventDefault();
-      var names = [];
-      for (var i = 0, list = e.dataTransfer.files; i < list.length; i += 1) {
-        var file = list[i];
-
-        var reader = new FileReader();
-        if (/\.(map|ccp4)$/.test(file.name)) {
-          reader.onloadend = function (evt) {
-            if (evt.target.readyState == 2) {
-              self.load_map_from_ab(evt.target.result);
-            }
-          };
-          reader.readAsArrayBuffer(file);
-        } else {
-          reader.onload = function (evt) {
-            self.load_from_string(evt.target.result, {});
-          };
-          reader.readAsText(file);
+  ReciprocalViewer.prototype.file_drop_callback = function file_drop_callback (file/*:File*/) {
+    var reader = new FileReader();
+    if (/\.(map|ccp4)$/.test(file.name)) {
+      reader.onloadend = function (evt) {
+        if (evt.target.readyState == 2) {
+          self.load_map_from_ab(evt.target.result);
         }
-        names.push(file.name);
-      }
-      self.hud('loading ' + names.join(', '));
-    });
+      };
+      reader.readAsArrayBuffer(file);
+    } else {
+      reader.onload = function (evt) {
+        self.load_from_string(evt.target.result, {});
+      };
+      reader.readAsText(file);
+    }
   };
 
   ReciprocalViewer.prototype.load_data = function load_data (url/*:string*/, options) {
@@ -4147,16 +4200,19 @@ var ReciprocalViewer = (function (Viewer$$1) {
 
     var self = this;
     this.load_file(url, {binary: false, progress: true}, function (req) {
-      self.load_from_string(req.responseText, options);
-      if (options.callback) { options.callback(); }
+      var ok = self.load_from_string(req.responseText, options);
+      if (ok && options.callback) { options.callback(); }
     });
   };
 
   ReciprocalViewer.prototype.load_from_string = function load_from_string (text/*:string*/, options/*:Object*/) {
     if (text[0] === '{') {
       this.data = parse_json(text);
-    } else {
+    } else if (text[0] === '#') {
       this.data = parse_csv(text);
+    } else {
+      this.hud('Unrecognized file type.');
+      return false;
     }
     this.max_dist = find_max_dist(this.data.pos);
     this.d_min = 1 / this.max_dist;
@@ -4173,6 +4229,7 @@ var ReciprocalViewer = (function (Viewer$$1) {
     this.controls.slab_width = [d, d, 100];
     this.set_view(options);
     this.hud('Loaded ' + this.data.pos.length + ' spots.');
+    return true;
   };
 
   ReciprocalViewer.prototype.load_map_from_ab = function load_map_from_ab (buffer/*:ArrayBuffer*/) {
@@ -4280,7 +4337,7 @@ var ReciprocalViewer = (function (Viewer$$1) {
   };
 
   ReciprocalViewer.prototype.get_cell_box_func = function get_cell_box_func () {
-    if (this.map_bags.size === 0) { return null; }
+    if (this.map_bags.length === 0) { return null; }
     // $FlowFixMe: here the map is ReciprocalSpaceMap not ElMap
     var a = this.map_bags[0].map.box_size;
     return function (xyz/*:[number,number,number]*/) {

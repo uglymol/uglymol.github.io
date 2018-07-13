@@ -452,20 +452,21 @@ export class Viewer {
     if (this.constructor === Viewer) this.set_real_space_key_bindings();
     if (typeof document === 'undefined') return;  // for testing on node
 
-    try {
-      this.renderer = new THREE.WebGLRenderer({antialias: true});
-    } catch (e) {
-      this.hud('no WebGL in your browser?', 'ERR');
-      this.renderer = null;
-      return;
-    }
-
     function get_elem(name) {
       if (options[name] === null) return null;
       return document.getElementById(options[name] || name);
     }
-    this.container = get_elem('viewer');
     this.hud_el = get_elem('hud');
+
+    try {
+      this.renderer = new THREE.WebGLRenderer({antialias: true});
+    } catch (e) {
+      this.hud('No WebGL in your browser?', 'ERR');
+      this.renderer = null;
+      return;
+    }
+
+    this.container = get_elem('viewer');
     this.help_el = get_elem('help');
     if (this.hud_el) {
       this.initial_hud_html = this.hud_el.innerHTML;
@@ -852,8 +853,11 @@ export class Viewer {
 
   toggle_full_screen() {
     let d = document;
+    // $FlowFixMe: Property mozFullScreenElement is missing in Document
     if (d.fullscreenElement || d.mozFullScreenElement ||
+        // $FlowFixMe: Property webkitExitFullscreen is missing in Document
         d.webkitFullscreenElement || d.msFullscreenElement) {
+      // $FlowFixMe: Property webkitExitFullscreen is missing in Document
       let ex = d.exitFullscreen || d.webkitExitFullscreen ||
       // $FlowFixMe: property `msExitFullscreen` not found in document
                d.mozCancelFullScreen || d.msExitFullscreen;
@@ -862,6 +866,7 @@ export class Viewer {
     } else {
       let el = this.container;
       if (!el) return;
+      // $FlowFixMe: Property webkitRequestFullscreen is missing in HTMLElement
       let req = el.requestFullscreen || el.webkitRequestFullscreen ||
       // $FlowFixMe: property `msRequestFullscreen` not found in HTMLElement
                 el.mozRequestFullScreen || el.msRequestFullscreen;
@@ -1222,7 +1227,7 @@ export class Viewer {
 
   // If xyz set recenter on it looking toward the model center.
   // Otherwise recenter on the model center looking along the z axis.
-  recenter(xyz/*:?Num3*/, cam/*:?Num3*/, steps/*:number*/) {
+  recenter(xyz/*:?Num3*/, cam/*:?Num3*/, steps/*:?number*/) {
     const bag = this.selected.bag;
     let new_up;
     if (xyz != null && cam == null && bag != null) {
@@ -1237,7 +1242,14 @@ export class Viewer {
       xyz = new THREE.Vector3(xyz[0], xyz[1], xyz[2]);
       cam = d.add(xyz);
     } else {
-      xyz = xyz || (bag ? bag.model.get_center() : [0, 0, 0]);
+      if (xyz == null) {
+        if (bag != null) {
+          xyz = bag.model.get_center();
+        } else {
+          const uc_func = this.get_cell_box_func();
+          xyz = uc_func ? uc_func([0.5, 0.5, 0.5]) : [0, 0, 0];
+        }
+      }
       if (cam != null) {
         cam = new THREE.Vector3(cam[0], cam[1], cam[2]);
         new_up = null; // preserve the up direction
@@ -1353,7 +1365,7 @@ export class Viewer {
           try {
             callback(req);
           } catch (e) {
-            self.hud('Error: ' + e.message + '\nin ' + url, 'ERR');
+            self.hud('Error: ' + e.message + '\nwhen processing ' + url, 'ERR');
           }
         } else {
           self.hud('Failed to fetch ' + url, 'ERR');
@@ -1364,8 +1376,8 @@ export class Viewer {
       req.addEventListener('progress', function (evt /*:ProgressEvent*/) {
         if (evt.lengthComputable && evt.loaded && evt.total) {
           const fn = url.split('/').pop();
-          self.hud('loading ' + fn + ' ... ' +
-                   (evt.loaded >> 10) + ' / ' + (evt.total >> 10) + ' kB');
+          self.hud('loading ' + fn + ' ... ' + ((evt.loaded / 1024) | 0) +
+                   ' / ' + ((evt.total / 1024) | 0) + ' kB');
           if (evt.loaded === evt.total) self.hud(); // clear progress message
         }
       });
@@ -1377,6 +1389,59 @@ export class Viewer {
     }
   }
 
+  set_dropzone(zone/*:Object*/, callback/*:Function*/) {
+    const self = this;
+    zone.addEventListener('dragover', function (e) {
+      e.stopPropagation();
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      self.hud('ready for file drop...');
+    });
+    zone.addEventListener('drop', function (e) {
+      e.stopPropagation();
+      e.preventDefault();
+      let names = [];
+      for (const file of e.dataTransfer.files) {
+        try {
+          callback(file);
+        } catch (e) {
+          self.hud('Loading ' + file.name + ' failed.\n' + e.message, 'ERR');
+          return;
+        }
+        names.push(file.name);
+      }
+      self.hud('loading ' + names.join(', '));
+    });
+  }
+
+  set_pdb_and_map_dropzone(zone/*:Object*/) {
+    const self = this;
+    this.set_dropzone(zone, function (file) {
+      const reader = new FileReader();
+      if (/\.(pdb|ent)$/.test(file.name)) {
+        reader.onload = function (evt) {
+          self.load_pdb_from_text(evt.target.result);
+          self.recenter();
+        };
+        reader.readAsText(file);
+      } else if (/\.(map|ccp4|dsn6|omap)$/.test(file.name)) {
+        const map_format = /\.(dsn6|omap)$/.test(file.name) ? 'dsn6' : 'ccp4';
+        reader.onloadend = function (evt) {
+          if (evt.target.readyState == 2) {
+            self.load_map_from_buffer(evt.target.result, {format: map_format});
+            if (self.model_bags.length === 0 && self.map_bags.length === 1) {
+              self.recenter();
+            }
+          }
+        };
+        reader.readAsArrayBuffer(file);
+      } else {
+        throw Error('Unknown file extension. ' +
+                    'Use: pdb, ent, ccp4, map, dsn6 or omap.');
+      }
+    });
+  }
+
   set_view(options/*:?Object*/) {
     const frag = parse_url_fragment();
     if (frag.zoom) this.camera.zoom = frag.zoom;
@@ -1384,15 +1449,19 @@ export class Viewer {
   }
 
   // Load molecular model from PDB file and centers the view
+  load_pdb_from_text(text/*:string*/) {
+    const len = this.model_bags.length;
+    const models = modelsFromPDB(text);
+    for (const model of models) {
+      this.add_model(model);
+    }
+    this.selected.bag = this.model_bags[len];
+  }
+
   load_pdb(url/*:string*/, options/*:?Object*/, callback/*:?Function*/) {
     let self = this;
     this.load_file(url, {binary: false}, function (req) {
-      const len = self.model_bags.length;
-      const models = modelsFromPDB(req.responseText);
-      for (const model of models) {
-        self.add_model(model);
-      }
-      self.selected.bag = self.model_bags[len];
+      self.load_pdb_from_text(req.responseText);
       self.set_view(options);
       if (callback) callback();
     });
@@ -1442,12 +1511,13 @@ export class Viewer {
   }
 
   load_from_pdbe() {
-    if (typeof window === 'undefined') return;
+    if (typeof window === 'undefined') return false;
     const url = window.location.href;
     const match = url.match(/[?&]id=([^&#]+)/);
-    if (match == null) return;
+    if (match == null) return false;
     const id = match[1].toLowerCase();
     this.load_pdb('https://www.ebi.ac.uk/pdbe/entry-files/pdb' + id + '.ent');
+    return true;
   }
 
   // TODO: navigation window like in gimp and mifit
