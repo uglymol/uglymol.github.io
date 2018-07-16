@@ -21,9 +21,10 @@ Try it:
 
 - [1MRU](1mru.html) (60kDa, 3Å),
   and in [dual view](dual.html) with PDB_REDO,
-- a bigger one -- [4UN4](4un4.html) (200kDa, 2.4Å),
 - [a blob](dimple_thaum.html#xyz=14,18,12&eye=80,71,-41&zoom=70)
-  (Dimple result, thaumatin, 1.4Å).
+  (Dimple result, thaumatin, 1.4Å),
+- or any [local file or wwPDB entry](view/).
+
 
 It also has a [reciprocal space spin-off](reciprocal.html?rlp=data/rlp.csv).
 
