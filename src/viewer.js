@@ -1,15 +1,18 @@
 // @flow
 
-import * as THREE from 'three';
+import { OrthographicCamera, Scene, AmbientLight, Color, Vector2, Vector3,
+         Object3D, Raycaster, WebGLRenderer, Fog } from './fromthree.js';
+
 import { makeLineMaterial, makeLineSegments, makeLine, makeRibbon,
-         makeChickenWire, makeGrid, makeWheels, makeCube,
-         makeRgbBox, makeLabel, addXyzCross } from './lines.js';
+         makeChickenWire, makeGrid, makeBalls, makeWheels, makeCube,
+         makeRgbBox, makeLabel, addXyzCross } from './draw.js';
 import { STATE, Controls } from './controls.js';
 import { ElMap } from './elmap.js';
 import { modelsFromPDB } from './model.js';
 
 /*::
  import type {AtomT, Model} from './model.js'
+ import type {Mesh} from './fromthree.js'
 
  type ColorScheme = {
    name: string,
@@ -105,12 +108,13 @@ const INIT_HUD_TEXT = 'This is UglyMol not Coot. ' +
 
 const COLOR_AIMS = ['element', 'B-factor', 'occupancy', 'index', 'chain'];
 const RENDER_STYLES = ['lines', 'trace', 'ribbon'/*, 'ball&stick'*/];
+const LIGAND_STYLES = ['normal', 'ball&stick'];
 const MAP_STYLES = ['marching cubes', 'squarish'/*, 'snapped MC'*/];
 const LINE_STYLES = ['normal', 'simplistic'];
 const LABEL_FONTS = ['bold 14px', '14px', '16px', 'bold 16px'];
 
 function rainbow_value(v/*:number*/, vmin/*:number*/, vmax/*:number*/) {
-  let c = new THREE.Color(0xe0e0e0);
+  let c = new Color(0xe0e0e0);
   if (vmin < vmax) {
     const ratio = (v - vmin) / (vmax - vmin);
     const hue = (240 - (240 * ratio)) / 360;
@@ -152,7 +156,9 @@ function color_by(style, atoms /*:AtomT[]*/, elem_colors, hue_shift) {
         return elem_colors[atom.element] || elem_colors.def;
       };
     } else {
-      const c_col = elem_colors['C'].clone().offsetHSL(hue_shift, 0, 0);
+      const c_hsl = elem_colors['C'].getHSL();
+      const c_col = new Color(0, 0, 0);
+      c_col.setHSL(c_hsl.h + hue_shift, c_hsl.s, c_hsl.l);
       color_func = function (atom) {
         const el = atom.element;
         return el === 'C' ? c_col : (elem_colors[el] || elem_colors.def);
@@ -173,7 +179,7 @@ class MapBag {
   isolevel: number
   visible: boolean
   types: string[]
-  block_ctr: THREE.Vector3
+  block_ctr: Vector3
   el_objects: Object[]
   */
   constructor(map, config, is_diff_map) {
@@ -182,7 +188,7 @@ class MapBag {
     this.isolevel = is_diff_map ? 3.0 : config.default_isolevel;
     this.visible = true;
     this.types = is_diff_map ? ['map_pos', 'map_neg'] : ['map_den'];
-    this.block_ctr = new THREE.Vector3(Infinity, 0, 0);
+    this.block_ctr = new Vector3(Infinity, 0, 0);
     this.el_objects = []; // three.js objects
   }
 }
@@ -228,16 +234,14 @@ class ModelBag {
     const color_style = ligands_only ? 'element' : this.conf.color_aim;
     const colors = color_by(color_style, visible_atoms,
                             this.conf.colors, this.hue_shift);
-    let vertex_arr /*:THREE.Vector3[]*/ = [];
+    let vertex_arr /*:Vector3[]*/ = [];
     let color_arr = [];
-    const opt = { hydrogens: this.conf.hydrogens,
-                  ligands_only: ligands_only,
-                  balls: this.conf.render_style === 'ball&stick' };
+    const hydrogens = this.conf.hydrogens;
     for (let i = 0; i < visible_atoms.length; i++) {
       const atom = visible_atoms[i];
       const color = colors[i];
       if (ligands_only && !atom.is_ligand) continue;
-      if (atom.bonds.length === 0 && !opt.balls) { // nonbonded, draw star
+      if (atom.bonds.length === 0 && ball_size == null) { // nonbonded - cross
         addXyzCross(vertex_arr, atom.xyz, 0.7);
         for (let n = 0; n < 6; n++) {
           color_arr.push(color);
@@ -245,15 +249,14 @@ class ModelBag {
       } else { // bonded, draw lines
         for (let j = 0; j < atom.bonds.length; j++) {
           const other = this.model.atoms[atom.bonds[j]];
-          if (!opt.hydrogens && other.element === 'H') continue;
+          if (!hydrogens && other.element === 'H') continue;
           // Coot show X-H bonds as thinner lines in a single color.
           // Here we keep it simple and render such bonds like all others.
-          if (opt.ligands_only && !other.is_ligand) continue;
+          if (ligands_only && !other.is_ligand) continue;
           const mid = atom.midpoint(other);
-          const vmid = new THREE.Vector3(mid[0], mid[1], mid[2]);
-          const vatom = new THREE.Vector3(atom.xyz[0], atom.xyz[1],
-                                          atom.xyz[2]);
-          if (opt.balls && ball_size != null) {
+          const vmid = new Vector3(mid[0], mid[1], mid[2]);
+          const vatom = new Vector3(atom.xyz[0], atom.xyz[1], atom.xyz[2]);
+          if (ball_size != null) {
             const lerp_factor = vatom.distanceTo(vmid) / ball_size;
             vatom.lerp(vmid, lerp_factor);
           }
@@ -264,18 +267,16 @@ class ModelBag {
     }
     if (vertex_arr.length === 0) return;
     const linewidth = scale_by_height(this.conf.bond_line, this.win_size);
-    const use_gl_lines = this.conf.line_style === 'simplistic';
     const material = makeLineMaterial({
-      gl_lines: use_gl_lines,
       linewidth: linewidth,
       win_size: this.win_size,
       segments: true,
     });
     this.atomic_objects.push(makeLineSegments(material, vertex_arr, color_arr));
-    if (opt.balls && ball_size != null) {
-      this.atomic_objects.push(makeWheels(visible_atoms, colors, ball_size));
-    } else if (!use_gl_lines && !ligands_only) {
-      // wheels (discs) as simplistic round caps
+    if (ball_size != null) {
+      this.atomic_objects.push(makeBalls(visible_atoms, colors, ball_size));
+    } else if (this.conf.line_style !== 'simplistic' && !ligands_only) {
+      // wheels (discs) as round caps
       this.atomic_objects.push(makeWheels(visible_atoms, colors, linewidth));
     }
   }
@@ -286,7 +287,6 @@ class ModelBag {
     const colors = color_by(this.conf.color_aim, visible_atoms,
                             this.conf.colors, this.hue_shift);
     const material = makeLineMaterial({
-      gl_lines: this.conf.line_style === 'simplistic',
       linewidth: scale_by_height(this.conf.bond_line, this.win_size),
       win_size: this.win_size,
     });
@@ -370,23 +370,23 @@ export class Viewer {
   map_bags: MapBag[]
   decor: {cell_box: ?Object , selection: ?Object, zoom_grid: Object,
           mark: ?Object}
-  labels: {[id:string]: {o: THREE.Mesh, bag: ModelBag}}
+  labels: {[id:string]: {o: Mesh, bag: ModelBag}}
   nav: ?Object
   xhr_headers: {[id:string]: string}
   config: Object
   window_size: [number, number]
   window_offset: [number, number]
-  last_ctr: THREE.Vector3
+  last_ctr: Vector3
   selected: {bag: ?ModelBag, atom: ?AtomT}
-  scene: THREE.Scene
-  light: THREE.Light
+  scene: Scene
+  light: AmbientLight
   default_camera_pos: [number, number, number]
-  target: THREE.Vector3
-  camera: THREE.OrthographicCamera
+  target: Vector3
+  camera: OrthographicCamera
   controls: Controls
   tied_viewer: ?Viewer
-  raycaster: THREE.Raycaster
-  renderer: THREE.WebGLRenderer
+  raycaster: Raycaster
+  renderer: WebGLRenderer
   container: ?HTMLElement
   hud_el: ?HTMLElement
   help_el: ?HTMLElement
@@ -420,6 +420,7 @@ export class Viewer {
       center_cube_size: 0.1,
       map_style: MAP_STYLES[0],
       render_style: RENDER_STYLES[0],
+      ligand_style: LIGAND_STYLES[0],
       color_aim: COLOR_AIMS[0],
       line_style: LINE_STYLES[0],
       label_font: LABEL_FONTS[0],
@@ -430,11 +431,11 @@ export class Viewer {
     this.window_size = [1, 1]; // it will be set in resize()
     this.window_offset = [0, 0];
 
-    this.last_ctr = new THREE.Vector3(Infinity, 0, 0);
+    this.last_ctr = new Vector3(Infinity, 0, 0);
     this.selected = {bag: null, atom: null};
-    this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.Fog(this.config.colors.bg, 0, 1);
-    this.light = new THREE.AmbientLight(0xffffff);
+    this.scene = new Scene();
+    this.scene.fog = new Fog(this.config.colors.bg, 0, 1);
+    this.light = new AmbientLight(0xffffff);
     this.scene.add(this.light);
     this.default_camera_pos = [0, 0, 100];
     if (options.share_view) {
@@ -444,12 +445,12 @@ export class Viewer {
       this.tied_viewer = options.share_view;
       this.tied_viewer.tied_viewer = this; // not GC friendly
     } else {
-      this.target = new THREE.Vector3(0, 0, 0);
-      this.camera = new THREE.OrthographicCamera();
+      this.target = new Vector3(0, 0, 0);
+      this.camera = new OrthographicCamera();
       this.camera.position.fromArray(this.default_camera_pos);
       this.controls = new Controls(this.camera, this.target);
     }
-    this.raycaster = new THREE.Raycaster();
+    this.raycaster = new Raycaster();
     this.set_common_key_bindings();
     if (this.constructor === Viewer) this.set_real_space_key_bindings();
     if (typeof document === 'undefined') return;  // for testing on node
@@ -461,7 +462,7 @@ export class Viewer {
     this.hud_el = get_elem('hud');
 
     try {
-      this.renderer = new THREE.WebGLRenderer({antialias: true});
+      this.renderer = new WebGLRenderer({antialias: true});
     } catch (e) {
       this.hud('No WebGL in your browser?', 'ERR');
       this.renderer = null;
@@ -489,11 +490,6 @@ export class Viewer {
     }
     this.decor.zoom_grid.visible = false;
     this.scene.add(this.decor.zoom_grid);
-    if (window.Stats) { // set by including three/examples/js/libs/stats.min.js
-      this.stats = new window.Stats();
-      // $FlowFixMe: flow can't figure out that this.container != null
-      this.container.appendChild(this.stats.dom);
-    }
 
     window.addEventListener('resize', this.resize.bind(this));
     let keydown_el = (options.focusable ? el : window);
@@ -537,7 +533,7 @@ export class Viewer {
     this.request_render();
   }
 
-  pick_atom(coords/*:THREE.Vector2*/, camera/*:THREE.OrthographicCamera*/) {
+  pick_atom(coords/*:Vector2*/, camera/*:OrthographicCamera*/) {
     for (const bag of this.model_bags) {
       if (!bag.visible) continue;
       this.raycaster.setFromCamera(coords, camera);
@@ -558,7 +554,7 @@ export class Viewer {
   }
 
   set_colors(scheme/*:?number|string|ColorScheme*/) {
-    function to_col(x) { return new THREE.Color(x); }
+    function to_col(x) { return new Color(x); }
     if (scheme == null) {
       scheme = this.config.colors;
     } else if (typeof scheme === 'number') {
@@ -672,16 +668,24 @@ export class Viewer {
 
   set_atomic_objects(model_bag/*:ModelBag*/) {
     model_bag.atomic_objects = [];
+    const ball_size = 0.3;
     switch (model_bag.conf.render_style) {
       case 'lines':
         model_bag.add_bonds();
+        if (model_bag.conf.ligand_style === 'ball&stick') {
+          // TODO move it to ModelBag
+          const ligand_atoms = model_bag.model.atoms.filter(function (a) {
+            return a.is_ligand && a.element !== 'H';
+          });
+          const colors = color_by('element', ligand_atoms,
+                                  model_bag.conf.colors, model_bag.hue_shift);
+          const obj = makeBalls(ligand_atoms, colors, ball_size);
+          model_bag.atomic_objects.push(obj);
+        }
         break;
-      case 'ball&stick': {
-        const h_scale = this.camera.projectionMatrix.elements[5];
-        const ball_size = Math.max(1, 200 * h_scale);
+      case 'ball&stick':
         model_bag.add_bonds(false, ball_size);
         break;
-      }
       case 'trace':  // + lines for ligands
         model_bag.add_trace();
         model_bag.add_bonds(true);
@@ -884,9 +888,7 @@ export class Viewer {
     } else {
       const uc_func = this.get_cell_box_func();
       if (uc_func) {
-        this.decor.cell_box = makeRgbBox(uc_func, {
-          color: this.config.colors.fg,
-        });
+        this.decor.cell_box = makeRgbBox(uc_func, this.config.colors.fg);
         this.scene.add(this.decor.cell_box);
       }
     }
@@ -1101,6 +1103,12 @@ export class Viewer {
     kb[70] = function (evt) {
       evt.shiftKey ? this.toggle_full_screen() : this.change_slab_width_by(0.1);
     };
+    // l
+    kb[76] = function (evt) {
+      this.select_next('ligands as', 'ligand_style', LIGAND_STYLES,
+                       evt.shiftKey);
+      this.redraw_models();
+    };
     // p
     kb[80] = function (evt) {
       evt.shiftKey ? this.permalink() : this.go_to_nearest_Ca();
@@ -1163,7 +1171,7 @@ export class Viewer {
       this.remove_and_dispose(this.decor.selection);
       this.decor.selection = null;
     }
-    const mouse = new THREE.Vector2(this.relX(event), this.relY(event));
+    const mouse = new Vector2(this.relX(event), this.relY(event));
     const pick = this.pick_atom(mouse, this.camera);
     if (pick) {
       const atom = pick.atom;
@@ -1254,12 +1262,12 @@ export class Viewer {
       // look from specified point toward the center of the molecule,
       // i.e. shift camera away from the molecule center.
       const mc = bag.model.get_center();
-      let d = new THREE.Vector3(xyz[0] - mc[0], xyz[1] - mc[1], xyz[2] - mc[2]);
+      let d = new Vector3(xyz[0] - mc[0], xyz[1] - mc[1], xyz[2] - mc[2]);
       d.setLength(100);
-      new_up = d.y < 90 ? new THREE.Vector3(0, 1, 0)
-                        : new THREE.Vector3(1, 0, 0);
+      new_up = d.y < 90 ? new Vector3(0, 1, 0)
+                        : new Vector3(1, 0, 0);
       new_up.projectOnPlane(d).normalize();
-      xyz = new THREE.Vector3(xyz[0], xyz[1], xyz[2]);
+      xyz = new Vector3(xyz[0], xyz[1], xyz[2]);
       cam = d.add(xyz);
     } else {
       if (xyz == null) {
@@ -1271,12 +1279,12 @@ export class Viewer {
         }
       }
       if (cam != null) {
-        cam = new THREE.Vector3(cam[0], cam[1], cam[2]);
+        cam = new Vector3(cam[0], cam[1], cam[2]);
         new_up = null; // preserve the up direction
       } else {
         const dc = this.default_camera_pos;
-        cam = new THREE.Vector3(xyz[0] + dc[0], xyz[1] + dc[1], xyz[2] + dc[2]);
-        new_up = THREE.Object3D.DefaultUp; // Vector3(0, 1, 0)
+        cam = new Vector3(xyz[0] + dc[0], xyz[1] + dc[1], xyz[2] + dc[2]);
+        new_up = Object3D.DefaultUp; // Vector3(0, 1, 0)
       }
     }
     this.controls.go_to(xyz, cam, new_up, steps);
@@ -1566,13 +1574,13 @@ export class Viewer {
     if (!inset) return;
     inset.style.display = 'block';
     var nav = {};
-    nav.renderer = new THREE.WebGLRenderer();
+    nav.renderer = new WebGLRenderer();
     nav.renderer.setClearColor(0x555555, 1);
     nav.renderer.setSize(200, 200);
     inset.appendChild(nav.renderer.domElement);
-    //nav.scene = new THREE.Scene();
+    //nav.scene = new Scene();
     nav.scene = this.scene;
-    //var light = new THREE.AmbientLight(0xffffff);
+    //var light = new AmbientLight(0xffffff);
     //nav.scene.add(light);
     this.nav = nav;
   };

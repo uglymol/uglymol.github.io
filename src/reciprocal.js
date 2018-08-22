@@ -2,8 +2,9 @@
 import { ElMap } from './elmap.js';
 import { Viewer } from './viewer.js';
 import { addXyzCross, makeLineMaterial, makeLineSegments,
-         makeUniforms } from './lines.js';
-import * as THREE from 'three';
+         makeUniforms } from './draw.js';
+import { Points, BufferAttribute, BufferGeometry, ShaderMaterial,
+         VertexColors } from './fromthree.js';
 
 
 // options handled by Viewer#select_next()
@@ -144,19 +145,24 @@ void main() {
   gl_PointSize = size;
 }`;
 
-const point_frag = `
+const round_point_frag = `
 #include <fog_pars_fragment>
 varying vec3 vcolor;
 void main() {
-  float alpha = 1.0;
-#ifdef ROUND
   // not sure how reliable is such rounding of points
   vec2 diff = gl_PointCoord - vec2(0.5, 0.5);
   float dist_sq = 4.0 * dot(diff, diff);
   if (dist_sq >= 1.0) discard;
-  alpha = 1.0 - dist_sq * dist_sq * dist_sq;
-#endif
+  float alpha = 1.0 - dist_sq * dist_sq * dist_sq;
   gl_FragColor = vec4(vcolor, alpha);
+#include <fog_fragment>
+}`;
+
+const square_point_frag = `
+#include <fog_pars_fragment>
+varying vec3 vcolor;
+void main() {
+  gl_FragColor = vec4(vcolor, 1.0);
 #include <fog_fragment>
 }`;
 
@@ -164,12 +170,12 @@ void main() {
 export class ReciprocalViewer extends Viewer {
   /*::
   axes: Object | null
-  points: THREE.Points | null
+  points: Points | null
   max_dist: number
   d_min: number
   d_max_inv: number
   data: Object
-  point_material: THREE.ShaderMaterial
+  point_material: ShaderMaterial
   */
   constructor(options/*:{[key:string]: any}*/) {
     super(options);
@@ -189,19 +195,16 @@ export class ReciprocalViewer extends Viewer {
       this.set_dropzone(this.renderer.domElement,
                         this.file_drop_callback.bind(this));
     }
-    this.point_material = new THREE.ShaderMaterial({
+    this.point_material = new ShaderMaterial({
       uniforms: makeUniforms({
         size: 3,
         show_only: -2,
         r2_max: 100,
         r2_min: 0,
       }),
-      defines: {
-        ROUND: true,
-      },
       vertexShader: point_vert,
-      fragmentShader: point_frag,
-      vertexColors: THREE.VertexColors,
+      fragmentShader: round_point_frag,
+      vertexColors: VertexColors,
       fog: true,
       transparent: true,
     });
@@ -226,7 +229,11 @@ export class ReciprocalViewer extends Viewer {
     // s
     kb[83] = function (evt) {
       this.select_next('spot shape', 'spot_shape', SPOT_SHAPES, evt.shiftKey);
-      this.point_material.defines.ROUND = (this.config.spot_shape === 'wheel');
+      if (this.config.spot_shape === 'wheel') {
+        this.point_material.fragmentShader = round_point_frag;
+      } else {
+        this.point_material.fragmentShader = square_point_frag;
+      }
       this.point_material.needsUpdate = true;
     };
     // u
@@ -382,12 +389,12 @@ export class ReciprocalViewer extends Viewer {
     if (data == null || data.lattice_ids == null || data.pos == null) return;
     let color_arr = new Float32Array(3 * data.lattice_ids.length);
     this.colorize_by_id(color_arr, data.lattice_ids);
-    let geometry = new THREE.BufferGeometry();
-    geometry.addAttribute('position', new THREE.BufferAttribute(data.pos, 3));
-    geometry.addAttribute('color', new THREE.BufferAttribute(color_arr, 3));
+    let geometry = new BufferGeometry();
+    geometry.addAttribute('position', new BufferAttribute(data.pos, 3));
+    geometry.addAttribute('color', new BufferAttribute(color_arr, 3));
     const groups = new Float32Array(data.lattice_ids);
-    geometry.addAttribute('group', new THREE.BufferAttribute(groups, 1));
-    this.points = new THREE.Points(geometry, this.point_material);
+    geometry.addAttribute('group', new BufferAttribute(groups, 1));
+    this.points = new Points(geometry, this.point_material);
     this.scene.add(this.points);
     this.request_render();
   }
