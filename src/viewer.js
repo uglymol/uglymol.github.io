@@ -1,7 +1,7 @@
 // @flow
 
-import { OrthographicCamera, Scene, AmbientLight, Color, Vector2, Vector3,
-         Object3D, Raycaster, WebGLRenderer, Fog } from './fromthree.js';
+import { OrthographicCamera, Scene, AmbientLight, Color, Vector3,
+         Raycaster, WebGLRenderer, Fog } from './fromthree.js';
 
 import { makeLineMaterial, makeLineSegments, makeLine, makeRibbon,
          makeChickenWire, makeGrid, makeBalls, makeWheels, makeCube,
@@ -254,13 +254,13 @@ class ModelBag {
           // Here we keep it simple and render such bonds like all others.
           if (ligands_only && !other.is_ligand) continue;
           const mid = atom.midpoint(other);
-          const vmid = new Vector3(mid[0], mid[1], mid[2]);
-          const vatom = new Vector3(atom.xyz[0], atom.xyz[1], atom.xyz[2]);
           if (ball_size != null) {
+            const vmid = new Vector3(mid[0], mid[1], mid[2]);
+            const vatom = new Vector3(atom.xyz[0], atom.xyz[1], atom.xyz[2]);
             const lerp_factor = vatom.distanceTo(vmid) / ball_size;
             vatom.lerp(vmid, lerp_factor);
           }
-          vertex_arr.push(vatom, vmid);
+          vertex_arr.push(atom.xyz, mid);
           color_arr.push(color, color);
         }
       }
@@ -294,7 +294,11 @@ class ModelBag {
     for (const seg of segments) {
       const color_slice = colors.slice(k, k + seg.length);
       k += seg.length;
-      const line = makeLine(material, seg, color_slice);
+      let pos = [];
+      for (const atom of seg) {
+        pos.push(atom.xyz);
+      }
+      const line = makeLine(material, pos, color_slice);
       this.atomic_objects.push(line);
     }
   }
@@ -396,7 +400,6 @@ export class Viewer {
   MOUSE_HELP: string
   KEYBOARD_HELP: string
   ABOUT_HELP: string
-  stats: ?Object
   mousemove: (MouseEvent) => void
   mouseup: (MouseEvent) => void
   key_bindings: Array<Function|false>
@@ -427,6 +430,14 @@ export class Viewer {
       colors: this.ColorSchemes[0],
       hydrogens: false,
     };
+
+    // options of the constructor overwrite default values of the config
+    for (let o of options) {
+      if (o in this.config) {
+        this.config[o] = options[o];
+      }
+    }
+
     this.set_colors();
     this.window_size = [1, 1]; // it will be set in resize()
     this.window_offset = [0, 0];
@@ -435,8 +446,7 @@ export class Viewer {
     this.selected = {bag: null, atom: null};
     this.scene = new Scene();
     this.scene.fog = new Fog(this.config.colors.bg, 0, 1);
-    this.light = new AmbientLight(0xffffff);
-    this.scene.add(this.light);
+    this.scene.add(new AmbientLight(0xffffff));
     this.default_camera_pos = [0, 0, 100];
     if (options.share_view) {
       this.target = options.share_view.target;
@@ -533,7 +543,7 @@ export class Viewer {
     this.request_render();
   }
 
-  pick_atom(coords/*:Vector2*/, camera/*:OrthographicCamera*/) {
+  pick_atom(coords/*:[number,number]*/, camera/*:OrthographicCamera*/) {
     for (const bag of this.model_bags) {
       if (!bag.visible) continue;
       this.raycaster.setFromCamera(coords, camera);
@@ -668,7 +678,7 @@ export class Viewer {
 
   set_atomic_objects(model_bag/*:ModelBag*/) {
     model_bag.atomic_objects = [];
-    const ball_size = 0.3;
+    const ball_size = 0.4;
     switch (model_bag.conf.render_style) {
       case 'lines':
         model_bag.add_bonds();
@@ -1171,7 +1181,7 @@ export class Viewer {
       this.remove_and_dispose(this.decor.selection);
       this.decor.selection = null;
     }
-    const mouse = new Vector2(this.relX(event), this.relY(event));
+    const mouse = [this.relX(event), this.relY(event)];
     const pick = this.pick_atom(mouse, this.camera);
     if (pick) {
       const atom = pick.atom;
@@ -1257,18 +1267,16 @@ export class Viewer {
   // Otherwise recenter on the model center looking along the z axis.
   recenter(xyz/*:?Num3*/, cam/*:?Num3*/, steps/*:?number*/) {
     const bag = this.selected.bag;
-    let new_up;
+    let new_up = new Vector3(0, 1, 0);
+    let eye;
     if (xyz != null && cam == null && bag != null) {
       // look from specified point toward the center of the molecule,
       // i.e. shift camera away from the molecule center.
       const mc = bag.model.get_center();
-      let d = new Vector3(xyz[0] - mc[0], xyz[1] - mc[1], xyz[2] - mc[2]);
-      d.setLength(100);
-      new_up = d.y < 90 ? new Vector3(0, 1, 0)
-                        : new Vector3(1, 0, 0);
-      new_up.projectOnPlane(d).normalize();
+      eye = new Vector3(xyz[0] - mc[0], xyz[1] - mc[1], xyz[2] - mc[2]);
+      eye.setLength(100);
       xyz = new Vector3(xyz[0], xyz[1], xyz[2]);
-      cam = d.add(xyz);
+      cam = eye.clone().add(xyz);
     } else {
       if (xyz == null) {
         if (bag != null) {
@@ -1278,14 +1286,20 @@ export class Viewer {
           xyz = uc_func ? uc_func([0.5, 0.5, 0.5]) : [0, 0, 0];
         }
       }
+      xyz = new Vector3(xyz[0], xyz[1], xyz[2]);
       if (cam != null) {
         cam = new Vector3(cam[0], cam[1], cam[2]);
-        new_up = null; // preserve the up direction
+        eye = cam.clone().sub(xyz);
+        new_up.copy(this.camera.up); // preserve the up direction
       } else {
         const dc = this.default_camera_pos;
-        cam = new Vector3(xyz[0] + dc[0], xyz[1] + dc[1], xyz[2] + dc[2]);
-        new_up = Object3D.DefaultUp; // Vector3(0, 1, 0)
+        cam = new Vector3(xyz.x + dc[0], xyz.y + dc[1], xyz.z + dc[2]);
       }
+    }
+    if (eye != null) {
+      new_up.projectOnPlane(eye);
+      if (new_up.lengthSq() < 0.0001) new_up.x += 1;
+      new_up.normalize();
     }
     this.controls.go_to(xyz, cam, new_up, steps);
   }
@@ -1301,7 +1315,9 @@ export class Viewer {
 
   select_atom(pick/*:{bag:ModelBag, atom:AtomT}*/, options/*:Object*/={}) {
     this.hud('-> ' + pick.bag.label + ' ' + pick.atom.long_label());
-    this.controls.go_to(pick.atom.xyz, null, null, options.steps);
+    let xyz = pick.atom.xyz;
+    this.controls.go_to(new Vector3(xyz[0], xyz[1], xyz[2]),
+                        null, null, options.steps);
     this.toggle_label(this.selected, false);
     this.selected = {bag: pick.bag, atom: pick.atom}; // not ...=pick b/c flow
     this.toggle_label(this.selected, true);
@@ -1313,7 +1329,6 @@ export class Viewer {
     const scale = w[2] || this.camera.zoom;
     this.camera.near = dxyz * (1 - w[0] / scale);
     this.camera.far = dxyz * (1 + w[1] / scale);
-    //this.light.position.copy(this.camera.position);
     this.camera.updateProjectionMatrix();
   }
 
@@ -1339,9 +1354,6 @@ export class Viewer {
     this.scheduled = false;
     if (this.controls.is_moving()) {
       this.request_render();
-    }
-    if (this.stats) {
-      this.stats.update();
     }
   }
 
@@ -1580,8 +1592,7 @@ export class Viewer {
     inset.appendChild(nav.renderer.domElement);
     //nav.scene = new Scene();
     nav.scene = this.scene;
-    //var light = new AmbientLight(0xffffff);
-    //nav.scene.add(light);
+    //nav.scene.add(new AmbientLight(0xffffff));
     this.nav = nav;
   };
   */
