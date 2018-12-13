@@ -4,7 +4,7 @@ import { OrthographicCamera, Scene, AmbientLight, Color, Vector3,
          Raycaster, WebGLRenderer, Fog } from './fromthree.js';
 
 import { makeLineMaterial, makeLineSegments, makeLine, makeRibbon,
-         makeChickenWire, makeGrid, makeBalls, makeWheels, makeCube,
+         makeChickenWire, makeGrid, makeSticks, makeBalls, makeWheels, makeCube,
          makeRgbBox, makeLabel, addXyzCross } from './draw.js';
 import { STATE, Controls } from './controls.js';
 import { ElMap } from './elmap.js';
@@ -106,8 +106,8 @@ const INIT_HUD_TEXT = 'This is UglyMol not Coot. ' +
 
 // options handled by select_next()
 
-const COLOR_AIMS = ['element', 'B-factor', 'occupancy', 'index', 'chain'];
-const RENDER_STYLES = ['lines', 'trace', 'ribbon'/*, 'ball&stick'*/];
+const COLOR_PROPS = ['element', 'B-factor', 'occupancy', 'index', 'chain'];
+const RENDER_STYLES = ['lines', 'trace', 'ribbon', 'ball&stick'];
 const LIGAND_STYLES = ['normal', 'ball&stick'];
 const MAP_STYLES = ['marching cubes', 'squarish'/*, 'snapped MC'*/];
 const LINE_STYLES = ['normal', 'simplistic'];
@@ -123,14 +123,14 @@ function rainbow_value(v/*:number*/, vmin/*:number*/, vmax/*:number*/) {
   return c;
 }
 
-function color_by(style, atoms /*:AtomT[]*/, elem_colors, hue_shift) {
+function color_by(prop, atoms /*:AtomT[]*/, elem_colors, hue_shift) {
   let color_func;
   const last_atom = atoms[atoms.length-1];
-  if (style === 'index') {
+  if (prop === 'index') {
     color_func = function (atom) {
       return rainbow_value(atom.i_seq, 0, last_atom.i_seq);
     };
-  } else if (style === 'B-factor') {
+  } else if (prop === 'B-factor') {
     let vmin = Infinity;
     let vmax = -Infinity;
     for (let i = 0; i < atoms.length; i++) {
@@ -142,11 +142,11 @@ function color_by(style, atoms /*:AtomT[]*/, elem_colors, hue_shift) {
     color_func = function (atom) {
       return rainbow_value(atom.b, vmin, vmax);
     };
-  } else if (style === 'occupancy') {
+  } else if (prop === 'occupancy') {
     color_func = function (atom) {
       return rainbow_value(atom.occ, 0, 1);
     };
-  } else if (style === 'chain') {
+  } else if (prop === 'chain') {
     color_func = function (atom) {
       return rainbow_value(atom.chain_index, 0, last_atom.chain_index);
     };
@@ -202,7 +202,7 @@ class ModelBag {
   hue_shift: number
   conf: Object
   win_size: [number, number]
-  atomic_objects: Object[]
+  objects: Object[]
   static ctor_counter: number
   */
   constructor(model, config, win_size) {
@@ -212,7 +212,7 @@ class ModelBag {
     this.hue_shift = 0;
     this.conf = config;
     this.win_size = win_size;
-    this.atomic_objects = []; // list of three.js objects
+    this.objects = []; // list of three.js objects
   }
 
   get_visible_atoms() {
@@ -231,8 +231,8 @@ class ModelBag {
 
   add_bonds(ligands_only, ball_size) {
     const visible_atoms = this.get_visible_atoms();
-    const color_style = ligands_only ? 'element' : this.conf.color_aim;
-    const colors = color_by(color_style, visible_atoms,
+    const color_prop = ligands_only ? 'element' : this.conf.color_prop;
+    const colors = color_by(color_prop, visible_atoms,
                             this.conf.colors, this.hue_shift);
     let vertex_arr /*:Vector3[]*/ = [];
     let color_arr = [];
@@ -254,12 +254,6 @@ class ModelBag {
           // Here we keep it simple and render such bonds like all others.
           if (ligands_only && !other.is_ligand) continue;
           const mid = atom.midpoint(other);
-          if (ball_size != null) {
-            const vmid = new Vector3(mid[0], mid[1], mid[2]);
-            const vatom = new Vector3(atom.xyz[0], atom.xyz[1], atom.xyz[2]);
-            const lerp_factor = vatom.distanceTo(vmid) / ball_size;
-            vatom.lerp(vmid, lerp_factor);
-          }
           vertex_arr.push(atom.xyz, mid);
           color_arr.push(color, color);
         }
@@ -267,24 +261,27 @@ class ModelBag {
     }
     if (vertex_arr.length === 0) return;
     const linewidth = scale_by_height(this.conf.bond_line, this.win_size);
-    const material = makeLineMaterial({
-      linewidth: linewidth,
-      win_size: this.win_size,
-      segments: true,
-    });
-    this.atomic_objects.push(makeLineSegments(material, vertex_arr, color_arr));
     if (ball_size != null) {
-      this.atomic_objects.push(makeBalls(visible_atoms, colors, ball_size));
-    } else if (this.conf.line_style !== 'simplistic' && !ligands_only) {
-      // wheels (discs) as round caps
-      this.atomic_objects.push(makeWheels(visible_atoms, colors, linewidth));
+      this.objects.push(makeSticks(vertex_arr, color_arr, ball_size / 2));
+      this.objects.push(makeBalls(visible_atoms, colors, ball_size));
+    } else {
+      const material = makeLineMaterial({
+        linewidth: linewidth,
+        win_size: this.win_size,
+        segments: true,
+      });
+      this.objects.push(makeLineSegments(material, vertex_arr, color_arr));
+      if (this.conf.line_style !== 'simplistic' && !ligands_only) {
+        // wheels (discs) as round caps
+        this.objects.push(makeWheels(visible_atoms, colors, linewidth));
+      }
     }
   }
 
   add_trace() {
     const segments = this.model.extract_trace();
     const visible_atoms = [].concat.apply([], segments);
-    const colors = color_by(this.conf.color_aim, visible_atoms,
+    const colors = color_by(this.conf.color_prop, visible_atoms,
                             this.conf.colors, this.hue_shift);
     const material = makeLineMaterial({
       linewidth: scale_by_height(this.conf.bond_line, this.win_size),
@@ -299,7 +296,7 @@ class ModelBag {
         pos.push(atom.xyz);
       }
       const line = makeLine(material, pos, color_slice);
-      this.atomic_objects.push(line);
+      this.objects.push(line);
     }
   }
 
@@ -307,7 +304,7 @@ class ModelBag {
     const segments = this.model.extract_trace();
     const res_map = this.model.get_residues();
     const visible_atoms = [].concat.apply([], segments);
-    const colors = color_by(this.conf.color_aim, visible_atoms,
+    const colors = color_by(this.conf.color_prop, visible_atoms,
                             this.conf.colors, this.hue_shift);
     let k = 0;
     for (const seg of segments) {
@@ -328,7 +325,7 @@ class ModelBag {
       const color_slice = colors.slice(k, k + seg.length);
       k += seg.length;
       const obj = makeRibbon(seg, color_slice, tangents, smoothness);
-      this.atomic_objects.push(obj);
+      this.objects.push(obj);
     }
   }
 }
@@ -424,11 +421,12 @@ export class Viewer {
       map_style: MAP_STYLES[0],
       render_style: RENDER_STYLES[0],
       ligand_style: LIGAND_STYLES[0],
-      color_aim: COLOR_AIMS[0],
+      color_prop: COLOR_PROPS[0],
       line_style: LINE_STYLES[0],
       label_font: LABEL_FONTS[0],
       colors: this.ColorSchemes[0],
       hydrogens: false,
+      ball_size: 0.4,
     };
 
     // options of the constructor overwrite default values of the config
@@ -551,7 +549,7 @@ export class Viewer {
       // '0.15' b/c the furthest 15% is hardly visible in the fog
       this.raycaster.far = camera.far - 0.15 * (camera.far - camera.near);
       this.raycaster.linePrecision = 0.3;
-      let intersects = this.raycaster.intersectObjects(bag.atomic_objects);
+      let intersects = this.raycaster.intersectObjects(bag.objects);
       if (intersects.length > 0) {
         intersects.sort(function (x) { return x.line_dist || Infinity; });
         const p = intersects[0].point;
@@ -669,32 +667,37 @@ export class Viewer {
     map_bag.el_objects = [];
   }
 
-  clear_atomic_objects(model_bag/*:ModelBag*/) {
-    for (let o of model_bag.atomic_objects) {
+  clear_model_objects(model_bag/*:ModelBag*/) {
+    for (let o of model_bag.objects) {
       this.remove_and_dispose(o);
     }
-    model_bag.atomic_objects = [];
+    model_bag.objects = [];
   }
 
-  set_atomic_objects(model_bag/*:ModelBag*/) {
-    model_bag.atomic_objects = [];
-    const ball_size = 0.4;
+  set_model_objects(model_bag/*:ModelBag*/) {
+    model_bag.objects = [];
     switch (model_bag.conf.render_style) {
       case 'lines':
         model_bag.add_bonds();
-        if (model_bag.conf.ligand_style === 'ball&stick') {
+        if (model_bag.conf.ligand_style === 'ball&stick' &&
+            this.renderer.extensions.get('EXT_frag_depth')) {
           // TODO move it to ModelBag
           const ligand_atoms = model_bag.model.atoms.filter(function (a) {
             return a.is_ligand && a.element !== 'H';
           });
           const colors = color_by('element', ligand_atoms,
                                   model_bag.conf.colors, model_bag.hue_shift);
-          const obj = makeBalls(ligand_atoms, colors, ball_size);
-          model_bag.atomic_objects.push(obj);
+          const obj = makeBalls(ligand_atoms, colors, this.config.ball_size);
+          model_bag.objects.push(obj);
         }
         break;
       case 'ball&stick':
-        model_bag.add_bonds(false, ball_size);
+        if (this.renderer.extensions.get('EXT_frag_depth')) {
+          model_bag.add_bonds(false, this.config.ball_size);
+        } else {
+          this.hud('Ball-and-stick rendering is not working in this browser' +
+                   '\ndue to lack of suppport for EXT_frag_depth', 'ERR');
+        }
         break;
       case 'trace':  // + lines for ligands
         model_bag.add_trace();
@@ -705,7 +708,7 @@ export class Viewer {
         model_bag.add_bonds(true);
         break;
     }
-    for (let o of model_bag.atomic_objects) {
+    for (let o of model_bag.objects) {
       this.scene.add(o);
     }
   }
@@ -720,11 +723,13 @@ export class Viewer {
     if (show) {
       if (is_shown) return;
       if (pick.atom == null) return; // silly flow
+      let balls = pick.bag && pick.bag.conf.render_style === 'ball&stick';
       const label = makeLabel(text, {
         pos: pick.atom.xyz,
         font: this.config.label_font,
         color: '#' + this.config.colors.fg.getHexString(),
         win_size: this.window_size,
+        z_shift: balls ? this.config.ball_size + 0.1 : 0.2,
       });
       if (!label) return;
       if (pick.bag == null) return;
@@ -773,9 +778,9 @@ export class Viewer {
   }
 
   redraw_model(model_bag/*:ModelBag*/) {
-    this.clear_atomic_objects(model_bag);
+    this.clear_model_objects(model_bag);
     if (model_bag.visible) {
-      this.set_atomic_objects(model_bag);
+      this.set_model_objects(model_bag);
     }
   }
 
@@ -1019,7 +1024,7 @@ export class Viewer {
     };
     // c
     kb[67] = function (evt) {
-      this.select_next('coloring by', 'color_aim', COLOR_AIMS, evt.shiftKey);
+      this.select_next('coloring by', 'color_prop', COLOR_PROPS, evt.shiftKey);
       this.redraw_models();
     };
     // e
@@ -1368,7 +1373,7 @@ export class Viewer {
     const model_bag = new ModelBag(model, this.config, this.window_size);
     model_bag.hue_shift = options.hue_shift || 0.06 * this.model_bags.length;
     this.model_bags.push(model_bag);
-    this.set_atomic_objects(model_bag);
+    this.set_model_objects(model_bag);
     this.request_render();
   }
 

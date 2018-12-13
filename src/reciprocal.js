@@ -3,8 +3,8 @@ import { ElMap } from './elmap.js';
 import { Viewer } from './viewer.js';
 import { addXyzCross, makeLineMaterial, makeLineSegments,
          makeUniforms, fog_pars_fragment, fog_end_fragment } from './draw.js';
-import { Points, BufferAttribute, BufferGeometry, ShaderMaterial,
-         VertexColors } from './fromthree.js';
+import { Points, BufferAttribute, BufferGeometry,
+         ShaderMaterial } from './fromthree.js';
 
 
 // options handled by Viewer#select_next()
@@ -130,6 +130,7 @@ function parse_json(text) {
 }
 
 const point_vert = `
+attribute vec3 color;
 attribute float group;
 uniform float show_only;
 uniform float r2_max;
@@ -204,7 +205,6 @@ export class ReciprocalViewer extends Viewer {
       }),
       vertexShader: point_vert,
       fragmentShader: round_point_frag,
-      vertexColors: VertexColors,
       fog: true,
       transparent: true,
       type: 'um_point',
@@ -347,7 +347,7 @@ export class ReciprocalViewer extends Viewer {
     const map_range = map.box_size[0] / 2;
     this.config.map_radius = Math.round(map_range / 2 * 100) / 100;
     this.config.max_map_radius = Math.round(1.5 * map_range * 100) / 100;
-    this.config.default_isolevel = 0.3;
+    this.config.default_isolevel = 2.0;
     this.add_map(map, false);
     const map_dmin = 1 / map_range;
     let msg = 'Loaded density map (' + map_dmin.toFixed(2) + 'Å).\n';

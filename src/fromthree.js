@@ -42,11 +42,8 @@ if ( Object.assign === undefined ) {
   } )();
 }
 
-let NoColors = 0;
-let VertexColors = 2;
 let NoBlending = 0;
 let NormalBlending = 1;
-let LessEqualDepth = 3;
 let TrianglesDrawMode = 0;
 let TriangleStripDrawMode = 1;
 let TriangleFanDrawMode = 2;
@@ -1079,13 +1076,11 @@ function WebGLUniforms( gl, program, renderer ) {
 
 WebGLUniforms.prototype.setValue = function ( gl, name, value ) {
   let u = this.map[name];
-
   if ( u !== undefined ) u.setValue( gl, value, this.renderer );
 };
 
 WebGLUniforms.prototype.set = function ( gl, object, name ) {
   let u = this.map[name];
-
   if ( u !== undefined ) u.setValue( gl, object[name], this.renderer );
 };
 
@@ -1320,20 +1315,15 @@ function Material() {
 
   this.fog = true;
 
-  this.vertexColors = NoColors; // NoColors, VertexColors, FaceColors
-
   this.opacity = 1;
   this.transparent = false;
 
-  this.depthFunc = LessEqualDepth;
   this.depthTest = true;
   this.depthWrite = true;
 
   this.precision = null; // override the renderer's default precision for this material
 
   this.premultipliedAlpha = false;
-
-  this.overdraw = 0; // Overdrawn pixels (typically between 0 and 1) for fixing antialiasing gaps in CanvasRenderer
 
   this.visible = true;
 
@@ -2015,41 +2005,21 @@ function WebGLProgram( renderer, code, material, parameters ) {
   prefixVertex = [
     'precision ' + parameters.precision + ' float;',
     'precision ' + parameters.precision + ' int;',
-
     '#define SHADER_NAME ' + material.__webglShader.name,
-
-    parameters.vertexColors ? '#define USE_COLOR' : '',
-
     'uniform mat4 modelMatrix;',
     'uniform mat4 modelViewMatrix;',
     'uniform mat4 projectionMatrix;',
     'uniform mat4 viewMatrix;',
-    'uniform vec3 cameraPosition;',
-
     'attribute vec3 position;',
-    'attribute vec3 normal;',
-
-    '#ifdef USE_COLOR',
-    ' attribute vec3 color;',
-    '#endif',
     '',
   ].join( '\n' );
 
   prefixFragment = [
-
     customExtensions,
-
     'precision ' + parameters.precision + ' float;',
     'precision ' + parameters.precision + ' int;',
-
     '#define SHADER_NAME ' + material.__webglShader.name,
-
     ( parameters.useFog && parameters.fog ) ? '#define USE_FOG' : '',
-
-    parameters.vertexColors ? '#define USE_COLOR' : '',
-
-    'uniform mat4 viewMatrix;',
-    'uniform vec3 cameraPosition;',
     '',
   ].join( '\n' );
 
@@ -2138,7 +2108,7 @@ function WebGLPrograms( renderer, capabilities ) {
 
   let parameterNames = [
     'precision',
-    'vertexColors', 'fog', 'useFog',
+    'fog', 'useFog',
     'premultipliedAlpha',
   ];
 
@@ -2155,7 +2125,6 @@ function WebGLPrograms( renderer, capabilities ) {
 
     let parameters = {
       precision: precision,
-      vertexColors: material.vertexColors,
       fog: !! fog,
       useFog: material.fog,
       premultipliedAlpha: material.premultipliedAlpha,
@@ -2550,7 +2519,6 @@ function WebGLState( gl, extensions ) {
 
   function DepthBuffer() {
     let currentDepthMask = null;
-    let currentDepthFunc = null;
     let currentDepthClear = null;
 
     return {
@@ -2570,13 +2538,6 @@ function WebGLState( gl, extensions ) {
         }
       },
 
-      setFunc: function ( depthFunc ) {
-        if ( currentDepthFunc !== depthFunc ) {
-          gl.depthFunc( gl.LEQUAL );
-          currentDepthFunc = depthFunc;
-        }
-      },
-
       setClear: function ( depth ) {
         if ( currentDepthClear !== depth ) {
           gl.clearDepth( depth );
@@ -2586,7 +2547,6 @@ function WebGLState( gl, extensions ) {
 
       reset: function () {
         currentDepthMask = null;
-        currentDepthFunc = null;
         currentDepthClear = null;
       },
 
@@ -2643,7 +2603,7 @@ function WebGLState( gl, extensions ) {
     depthBuffer.setClear( 1 );
 
     enable( gl.DEPTH_TEST );
-    setDepthFunc( LessEqualDepth );
+    gl.depthFunc( gl.LEQUAL );
 
     enable( gl.BLEND );
     setBlending( NormalBlending );
@@ -2716,10 +2676,6 @@ function WebGLState( gl, extensions ) {
     depthBuffer.setMask( depthWrite );
   }
 
-  function setDepthFunc( depthFunc ) {
-    depthBuffer.setFunc( depthFunc );
-  }
-
   //
 
   function setLineWidth( width ) {
@@ -2790,7 +2746,6 @@ function WebGLState( gl, extensions ) {
 
     setDepthTest: setDepthTest,
     setDepthWrite: setDepthWrite,
-    setDepthFunc: setDepthFunc,
 
     setLineWidth: setLineWidth,
 
@@ -3553,7 +3508,6 @@ function WebGLRenderer( parameters ) {
       state.setBlending( NormalBlending, material.premultipliedAlpha )
       : state.setBlending( NoBlending );
 
-    state.setDepthFunc( material.depthFunc );
     state.setDepthTest( material.depthTest );
     state.setDepthWrite( material.depthWrite );
   }
@@ -3612,15 +3566,6 @@ function WebGLRenderer( parameters ) {
 
       // load material specific uniforms
       // (shader material also gets them for the sake of genericity)
-
-      if ( material.isShaderMaterial ) {
-        let uCamPos = p_uniforms.map.cameraPosition;
-
-        if ( uCamPos !== undefined ) {
-          uCamPos.setValue( _gl,
-                            _vector3.setFromMatrixPosition( camera.matrixWorld ) );
-        }
-      }
 
       if ( material.isShaderMaterial ) {
         p_uniforms.setValue( _gl, 'viewMatrix', camera.matrixWorldInverse );
@@ -4075,6 +4020,5 @@ export {
   Color,
   CatmullRomCurve3,
   TriangleStripDrawMode,
-  VertexColors,
   Texture,
 };
