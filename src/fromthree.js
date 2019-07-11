@@ -1422,6 +1422,20 @@ Ray.prototype = {
     return this;
   },
 
+  distanceSqToPoint: function () {
+    let v1 = new Vector3();
+
+    return function distanceSqToPoint( point ) {
+      let directionDistance = v1.subVectors( point, this.origin ).dot( this.direction );
+      // point behind the ray
+      if ( directionDistance < 0 ) {
+        return this.origin.distanceToSquared( point );
+      }
+      v1.copy( this.direction ).multiplyScalar( directionDistance ).add( this.origin );
+      return v1.distanceToSquared( point );
+    };
+  }(),
+
   distanceSqToSegment: function () {
     let segCenter = new Vector3();
     let segDir = new Vector3();
@@ -1588,9 +1602,6 @@ function Object3D() {
   this.renderOrder = 0;
 
   this.userData = {};
-
-  this.onBeforeRender = function () {};
-  this.onAfterRender = function () {};
 }
 
 Object3D.DefaultUp = new Vector3( 0, 1, 0 );
@@ -1640,8 +1651,6 @@ Object.assign( Object3D.prototype, EventDispatcher.prototype, {
       this.children.splice( index, 1 );
     }
   },
-
-  raycast: function () {},
 
   updateMatrix: function () {
     this.matrix.compose( this.position, this.quaternion, this.scale );
@@ -1837,8 +1846,6 @@ function OrthographicCamera( left, right, top, bottom, near, far ) {
 OrthographicCamera.prototype = Object.assign( Object.create( Camera.prototype ), {
 
   constructor: OrthographicCamera,
-
-  isOrthographicCamera: true,
 
   updateProjectionMatrix: function () {
     let dx = ( this.right - this.left ) / ( 2 * this.zoom );
@@ -2422,7 +2429,7 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, info )
     state.bindTexture( _gl.TEXTURE_2D, textureProperties.__webglTexture );
   }
 
-  function setTextureParameters( textureType, texture ) {
+  function setTextureParameters( textureType ) {
     _gl.texParameteri( textureType, _gl.TEXTURE_WRAP_S, _gl.CLAMP_TO_EDGE );
     _gl.texParameteri( textureType, _gl.TEXTURE_WRAP_T, _gl.CLAMP_TO_EDGE );
     _gl.texParameteri( textureType, _gl.TEXTURE_MAG_FILTER, _gl.LINEAR );
@@ -2450,7 +2457,7 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, info )
     let glFormat = _gl.RGBA;
     let glType = _gl.UNSIGNED_BYTE;
 
-    setTextureParameters( _gl.TEXTURE_2D, texture );
+    setTextureParameters( _gl.TEXTURE_2D );
 
     state.texImage2D( _gl.TEXTURE_2D, 0, glFormat, glFormat, glType, image );
 
@@ -3320,7 +3327,7 @@ function WebGLRenderer( parameters ) {
     opaqueObjectsLastIndex = - 1;
     transparentObjectsLastIndex = - 1;
 
-    projectObject( scene, camera );
+    projectObject( scene );
 
     opaqueObjects.length = opaqueObjectsLastIndex + 1;
     transparentObjects.length = transparentObjectsLastIndex + 1;
@@ -3411,7 +3418,7 @@ function WebGLRenderer( parameters ) {
     }
   }
 
-  function projectObject( object, camera ) {
+  function projectObject( object ) {
     if ( object.visible === false ) return;
 
     if ( object.isMesh || object.isLine || object.isPoints ) {
@@ -3432,25 +3439,20 @@ function WebGLRenderer( parameters ) {
     let children = object.children;
 
     for ( let i = 0, l = children.length; i < l; i ++ ) {
-      projectObject( children[i], camera );
+      projectObject( children[i] );
     }
   }
 
   function renderObjects( renderList, scene, camera, overrideMaterial ) {
     for ( let i = 0, l = renderList.length; i < l; i ++ ) {
       let renderItem = renderList[i];
-
       let object = renderItem.object;
       let geometry = renderItem.geometry;
       let material = overrideMaterial === undefined ? renderItem.material : overrideMaterial;
       let group = renderItem.group;
 
       object.modelViewMatrix.multiplyMatrices( camera.matrixWorldInverse, object.matrixWorld );
-      object.onBeforeRender( _this, scene, camera, geometry, material, group );
-
       _this.renderBufferDirect( camera, scene.fog, geometry, material, object, group );
-
-      object.onAfterRender( _this, scene, camera, geometry, material, group );
     }
   }
 
@@ -3765,55 +3767,6 @@ Points.prototype = Object.assign( Object.create( Object3D.prototype ), {
 // kept for compatibility with THREE
 function AmbientLight( color ) {}
 
-/**
-* @author mrdoob / http://mrdoob.com/
-* @author bhouston / http://clara.io/
-* @author stephomi / http://stephaneginier.com/
-*/
-
-function Raycaster( origin, direction, near, far ) {
-  this.ray = new Ray( origin, direction );
-  // direction is assumed to be normalized (for accurate distance calculations)
-
-  this.near = near || 0;
-  this.far = far || Infinity;
-}
-
-function ascSort( a, b ) {
-  return a.distance - b.distance;
-}
-
-function intersectObject( object, raycaster, intersects ) {
-  if ( object.visible === false ) return;
-  object.raycast( raycaster, intersects );
-}
-
-//
-
-Raycaster.prototype = {
-
-  constructor: Raycaster,
-
-  linePrecision: 1,
-
-  setFromCamera: function ( coords/*:[number,number]*/, camera ) {
-    if ( (camera && camera.isOrthographicCamera) ) {
-      this.ray.origin.set( coords[0], coords[1], ( camera.near + camera.far ) / ( camera.near - camera.far ) ).unproject( camera ); // set origin in plane of camera
-      this.ray.direction.set( 0, 0, - 1 ).transformDirection( camera.matrixWorld );
-    } else {
-      console.error( 'Raycaster: Unsupported camera type.' );
-    }
-  },
-
-  intersectObjects: function ( objects ) {
-    let intersects = [];
-    for ( let i = 0, l = objects.length; i < l; i ++ ) {
-      intersectObject( objects[i], this, intersects );
-    }
-    intersects.sort( ascSort );
-    return intersects;
-  },
-};
 
 /**
 * @author zz85 / http://www.lab4games.net/zz85/blog
@@ -3877,7 +3830,7 @@ let
   py = new CubicPoly(),
   pz = new CubicPoly();
 
-  /*
+/*
 Based on an optimized c++ solution in
  - http://stackoverflow.com/questions/9489736/catmull-rom-curve-with-no-cusps-and-no-self-intersections/
  - http://ideone.com/NoEbVM
@@ -4012,7 +3965,6 @@ export {
   BufferGeometry,
   BufferAttribute,
   Object3D,
-  Raycaster,
   Ray,
   Matrix4,
   Vector3,

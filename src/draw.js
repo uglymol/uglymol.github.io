@@ -446,7 +446,7 @@ export function makeLine(material /*:ShaderMaterial*/,
 
   let mesh = new Mesh(geometry, material);
   mesh.drawMode = TriangleStripDrawMode;
-  mesh.raycast = line_raycast;
+  mesh.userData.bond_lines = true;
   return mesh;
 }
 
@@ -456,19 +456,18 @@ export function makeLineSegments(material /*:ShaderMaterial*/,
                                  color_arr /*:?Color[]*/) {
   // n input vertices => 2n output vertices, n triangles, 3n indexes
   const len = vertex_arr.length;
-  let i;
   const pos = double_pos(vertex_arr);
   const position = new Float32Array(pos);
   let other_vert = new Float32Array(6*len);
-  for (i = 0; i < 6 * len; i += 12) {
+  for (let i = 0; i < 6 * len; i += 12) {
     let j = 0;
     for (; j < 6; j++) other_vert[i+j] = pos[i+j+6];
     for (; j < 12; j++) other_vert[i+j] = pos[i+j-6];
   }
   let side = new Float32Array(2*len);
-  for (i = 0; i < len; i++) {
-    side[2*i] = -1;
-    side[2*i+1] = 1;
+  for (let k = 0; k < len; k++) {
+    side[2*k] = -1;
+    side[2*k+1] = 1;
   }
   let geometry = new BufferGeometry();
   geometry.addAttribute('position', new BufferAttribute(position, 3));
@@ -481,7 +480,7 @@ export function makeLineSegments(material /*:ShaderMaterial*/,
   geometry.setIndex(make_quad_index_buffer(len/2));
 
   let mesh = new Mesh(geometry, material);
-  mesh.raycast = line_raycast;
+  mesh.userData.bond_lines = true;
   return mesh;
 }
 
@@ -527,8 +526,6 @@ export function makeWheels(atom_arr /*:AtomT[]*/,
     type: 'um_wheel',
   });
   let obj = new Points(geometry, material);
-  // currently we use only lines for picking
-  obj.raycast = function () {};
   return obj;
 }
 
@@ -668,7 +665,7 @@ export function makeSticks(vertex_arr /*:Num3[]*/,
   geometry.setIndex(make_quad_index_buffer(len/2));
 
   let mesh = new Mesh(geometry, material);
-  mesh.raycast = line_raycast;
+  mesh.userData.bond_lines = true;
   return mesh;
 }
 
@@ -727,39 +724,36 @@ export function makeBalls(atom_arr /*:AtomT[]*/,
   });
   material.extensions.fragDepth = true;
   let obj = new Mesh(geometry, material);
-  // currently we use only lines for picking
-  obj.raycast = function () {};
   return obj;
 }
 
 // based on Line.prototype.raycast(), but skipping duplicated points
 let inverseMatrix = new Matrix4();
 let ray = new Ray();
-// this function will be put on prototype
-/* eslint-disable no-invalid-this */
-function line_raycast(raycaster, intersects) {
-  const precisionSq = raycaster.linePrecision * raycaster.linePrecision;
-  inverseMatrix.getInverse(this.matrixWorld);
-  ray.copy(raycaster.ray).applyMatrix4(inverseMatrix);
+export function line_raycast(mesh/*:Mesh*/, options/*:Object*/,
+                             intersects/*:Object[]*/) {
+  const precisionSq = options.precision * options.precision;
+  inverseMatrix.getInverse(mesh.matrixWorld);
+  ray.copy(options.ray).applyMatrix4(inverseMatrix);
   let vStart = new Vector3();
   let vEnd = new Vector3();
   let interSegment = new Vector3();
   let interRay = new Vector3();
-  const step = this.drawMode === TriangleStripDrawMode ? 1 : 2;
-  const positions = this.geometry.attributes.position.array;
+  const step = mesh.drawMode === TriangleStripDrawMode ? 1 : 2;
+  const positions = mesh.geometry.attributes.position.array;
   for (let i = 0, l = positions.length / 6 - 1; i < l; i += step) {
     vStart.fromArray(positions, 6 * i);
     vEnd.fromArray(positions, 6 * i + 6);
     let distSq = ray.distanceSqToSegment(vStart, vEnd, interRay, interSegment);
     if (distSq > precisionSq) continue;
-    interRay.applyMatrix4(this.matrixWorld);
-    const distance = raycaster.ray.origin.distanceTo(interRay);
-    if (distance < raycaster.near || distance > raycaster.far) continue;
+    interRay.applyMatrix4(mesh.matrixWorld);
+    const distance = options.ray.origin.distanceTo(interRay);
+    if (distance < options.near || distance > options.far) continue;
     intersects.push({
       distance: distance,
-      point: interSegment.clone().applyMatrix4(this.matrixWorld),
+      point: interSegment.clone().applyMatrix4(mesh.matrixWorld),
       index: i,
-      object: this,
+      object: mesh,
       line_dist: Math.sqrt(distSq), // extra property, not in Three.js
     });
   }

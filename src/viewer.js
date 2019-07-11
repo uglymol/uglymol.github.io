@@ -1,7 +1,7 @@
 // @flow
 
 import { OrthographicCamera, Scene, AmbientLight, Color, Vector3,
-         Raycaster, WebGLRenderer, Fog } from './fromthree.js';
+         Ray, WebGLRenderer, Fog } from './fromthree.js';
 
 import { makeLineMaterial, makeLineSegments, makeLine, makeRibbon,
          makeChickenWire, makeGrid, makeSticks, makeBalls, makeWheels, makeCube,
@@ -20,6 +20,7 @@ import { modelsFromPDB } from './model.js';
    fg: number,
    [name:string]: number | number[],
  };
+ type Num2 = [number, number]
  type Num3 = [number, number, number];
  */
 
@@ -108,7 +109,7 @@ const INIT_HUD_TEXT = 'This is UglyMol not Coot. ' +
 
 const COLOR_PROPS = ['element', 'B-factor', 'occupancy', 'index', 'chain'];
 const RENDER_STYLES = ['lines', 'trace', 'ribbon', 'ball&stick'];
-const LIGAND_STYLES = ['normal', 'ball&stick'];
+const LIGAND_STYLES = ['ball&stick', 'lines'];
 const MAP_STYLES = ['marching cubes', 'squarish'/*, 'snapped MC'*/];
 const LINE_STYLES = ['normal', 'simplistic'];
 const LABEL_FONTS = ['bold 14px', '14px', '16px', 'bold 16px'];
@@ -182,7 +183,7 @@ class MapBag {
   block_ctr: Vector3
   el_objects: Object[]
   */
-  constructor(map, config, is_diff_map) {
+  constructor(map/*:ElMap*/, config/*:Object*/, is_diff_map/*:boolean*/) {
     this.map = map;
     this.name = '';
     this.isolevel = is_diff_map ? 3.0 : config.default_isolevel;
@@ -201,11 +202,12 @@ class ModelBag {
   visible: boolean
   hue_shift: number
   conf: Object
-  win_size: [number, number]
+  win_size: Num2
   objects: Object[]
+  atom_array: AtomT[]
   static ctor_counter: number
   */
-  constructor(model, config, win_size) {
+  constructor(model/*:Model*/, config/*:Object*/, win_size/*:Num2*/) {
     this.model = model;
     this.label = '(model #' + ++ModelBag.ctor_counter + ')';
     this.visible = true;
@@ -213,6 +215,7 @@ class ModelBag {
     this.conf = config;
     this.win_size = win_size;
     this.objects = []; // list of three.js objects
+    this.atom_array = [];
   }
 
   get_visible_atoms() {
@@ -229,10 +232,9 @@ class ModelBag {
     return non_h;
   }
 
-  add_bonds(ligands_only, ball_size) {
+  add_bonds(polymers/*:boolean*/, ligands/*:boolean*/, ball_size/*:?number*/) {
     const visible_atoms = this.get_visible_atoms();
-    const color_prop = ligands_only ? 'element' : this.conf.color_prop;
-    const colors = color_by(color_prop, visible_atoms,
+    const colors = color_by(this.conf.color_prop, visible_atoms,
                             this.conf.colors, this.hue_shift);
     let vertex_arr /*:Vector3[]*/ = [];
     let color_arr = [];
@@ -240,7 +242,7 @@ class ModelBag {
     for (let i = 0; i < visible_atoms.length; i++) {
       const atom = visible_atoms[i];
       const color = colors[i];
-      if (ligands_only && !atom.is_ligand) continue;
+      if (!(atom.is_ligand ? ligands : polymers)) continue;
       if (atom.bonds.length === 0 && ball_size == null) { // nonbonded - cross
         addXyzCross(vertex_arr, atom.xyz, 0.7);
         for (let n = 0; n < 6; n++) {
@@ -252,7 +254,6 @@ class ModelBag {
           if (!hydrogens && other.element === 'H') continue;
           // Coot show X-H bonds as thinner lines in a single color.
           // Here we keep it simple and render such bonds like all others.
-          if (ligands_only && !other.is_ligand) continue;
           const mid = atom.midpoint(other);
           vertex_arr.push(atom.xyz, mid);
           color_arr.push(color, color);
@@ -260,10 +261,24 @@ class ModelBag {
       }
     }
     if (vertex_arr.length === 0) return;
+
+    let sphere_arr = visible_atoms;
+    let sphere_color_arr = colors;
+    if (!polymers || !ligands) {
+      sphere_arr = [];
+      sphere_color_arr = [];
+      for (let i = 0; i < visible_atoms.length; i++) {
+        if (visible_atoms[i].is_ligand ? ligands : polymers) {
+          sphere_arr.push(visible_atoms[i]);
+          sphere_color_arr.push(colors[i]);
+        }
+      }
+    }
+
     const linewidth = scale_by_height(this.conf.bond_line, this.win_size);
     if (ball_size != null) {
       this.objects.push(makeSticks(vertex_arr, color_arr, ball_size / 2));
-      this.objects.push(makeBalls(visible_atoms, colors, ball_size));
+      this.objects.push(makeBalls(sphere_arr, sphere_color_arr, ball_size));
     } else {
       const material = makeLineMaterial({
         linewidth: linewidth,
@@ -271,11 +286,12 @@ class ModelBag {
         segments: true,
       });
       this.objects.push(makeLineSegments(material, vertex_arr, color_arr));
-      if (this.conf.line_style !== 'simplistic' && !ligands_only) {
+      if (this.conf.line_style !== 'simplistic') {
         // wheels (discs) as round caps
-        this.objects.push(makeWheels(visible_atoms, colors, linewidth));
+        this.objects.push(makeWheels(sphere_arr, sphere_color_arr, linewidth));
       }
     }
+    sphere_arr.forEach(function (v) { this.atom_array.push(v); }, this);
   }
 
   add_trace() {
@@ -298,9 +314,10 @@ class ModelBag {
       const line = makeLine(material, pos, color_slice);
       this.objects.push(line);
     }
+    this.atom_array = visible_atoms;
   }
 
-  add_ribbon(smoothness) {
+  add_ribbon(smoothness/*:number*/) {
     const segments = this.model.extract_trace();
     const res_map = this.model.get_residues();
     const visible_atoms = [].concat.apply([], segments);
@@ -375,18 +392,18 @@ export class Viewer {
   nav: ?Object
   xhr_headers: {[id:string]: string}
   config: Object
-  window_size: [number, number]
-  window_offset: [number, number]
+  window_size: Num2
+  window_offset: Num2
   last_ctr: Vector3
   selected: {bag: ?ModelBag, atom: ?AtomT}
+  dbl_click_callback: (Object) => void
   scene: Scene
   light: AmbientLight
-  default_camera_pos: [number, number, number]
+  default_camera_pos: Num3
   target: Vector3
   camera: OrthographicCamera
   controls: Controls
   tied_viewer: ?Viewer
-  raycaster: Raycaster
   renderer: WebGLRenderer
   container: ?HTMLElement
   hud_el: ?HTMLElement
@@ -442,6 +459,7 @@ export class Viewer {
 
     this.last_ctr = new Vector3(Infinity, 0, 0);
     this.selected = {bag: null, atom: null};
+    this.dbl_click_callback = this.toggle_label;
     this.scene = new Scene();
     this.scene.fog = new Fog(this.config.colors.bg, 0, 1);
     this.scene.add(new AmbientLight(0xffffff));
@@ -458,7 +476,6 @@ export class Viewer {
       this.camera.position.fromArray(this.default_camera_pos);
       this.controls = new Controls(this.camera, this.target);
     }
-    this.raycaster = new Raycaster();
     this.set_common_key_bindings();
     if (this.constructor === Viewer) this.set_real_space_key_bindings();
     if (typeof document === 'undefined') return;  // for testing on node
@@ -541,19 +558,44 @@ export class Viewer {
     this.request_render();
   }
 
-  pick_atom(coords/*:[number,number]*/, camera/*:OrthographicCamera*/) {
+  pick_atom(coords/*:Num2*/, camera/*:OrthographicCamera*/) {
     for (const bag of this.model_bags) {
       if (!bag.visible) continue;
-      this.raycaster.setFromCamera(coords, camera);
-      this.raycaster.near = camera.near;
+      const z = (camera.near + camera.far) / (camera.near - camera.far);
+      let ray = new Ray();
+      ray.origin.set(coords[0], coords[1], z).unproject(camera);
+      ray.direction.set(0, 0, -1).transformDirection(camera.matrixWorld);
+      let near = camera.near;
       // '0.15' b/c the furthest 15% is hardly visible in the fog
-      this.raycaster.far = camera.far - 0.15 * (camera.far - camera.near);
-      this.raycaster.linePrecision = 0.3;
-      let intersects = this.raycaster.intersectObjects(bag.objects);
+      let far = camera.far - 0.15 * (camera.far - camera.near);
+      let intersects = [];
+      /*
+      // previous version - line-based search
+      for (const object of bag.objects) {
+        if (object.visible === false) continue;
+        if (object.userData.bond_lines) {
+          line_raycast(object, {ray, near, far, precision: 0.3}, intersects);
+        }
+      }
+      */
+      // search directly atom array ignoring matrixWorld
+      let vec = new Vector3();
+      for (const atom of bag.atom_array) {
+        vec.set(atom.xyz[0] - ray.origin.x,
+                atom.xyz[1] - ray.origin.y,
+                atom.xyz[2] - ray.origin.z);
+        let distance = vec.dot(ray.direction);
+        if (distance < 0 || distance < near || distance > far) continue;
+        let dist2 = vec.addScaledVector(ray.direction, -distance).lengthSq();
+        if (dist2 > 0.25) continue;
+        intersects.push({distance, atom, dist2});
+      }
+
       if (intersects.length > 0) {
-        intersects.sort(function (x) { return x.line_dist || Infinity; });
-        const p = intersects[0].point;
-        const atom = bag.model.get_nearest_atom(p.x, p.y, p.z);
+        intersects.sort(function (x) { return x.dist2 || Infinity; });
+        //const p = intersects[0].point;
+        //const atom = bag.model.get_nearest_atom(p.x, p.y, p.z);
+        const atom = intersects[0].atom;
         if (atom != null) {
           return {bag, atom};
         }
@@ -674,38 +716,46 @@ export class Viewer {
     model_bag.objects = [];
   }
 
+  has_frag_depth() {
+    return this.renderer && this.renderer.extensions.get('EXT_frag_depth');
+  }
+
   set_model_objects(model_bag/*:ModelBag*/) {
     model_bag.objects = [];
+    model_bag.atom_array = [];
+    let ligand_balls = null;
+    if (model_bag.conf.ligand_style === 'ball&stick' && this.has_frag_depth()) {
+      ligand_balls = this.config.ball_size;
+    }
     switch (model_bag.conf.render_style) {
       case 'lines':
-        model_bag.add_bonds();
-        if (model_bag.conf.ligand_style === 'ball&stick' &&
-            this.renderer.extensions.get('EXT_frag_depth')) {
-          // TODO move it to ModelBag
-          const ligand_atoms = model_bag.model.atoms.filter(function (a) {
-            return a.is_ligand && a.element !== 'H';
-          });
-          const colors = color_by('element', ligand_atoms,
-                                  model_bag.conf.colors, model_bag.hue_shift);
-          const obj = makeBalls(ligand_atoms, colors, this.config.ball_size);
-          model_bag.objects.push(obj);
+        if (ligand_balls === null) {
+          model_bag.add_bonds(true, true);
+        } else {
+          model_bag.add_bonds(true, false);
+          model_bag.add_bonds(false, true, ligand_balls);
         }
         break;
       case 'ball&stick':
-        if (this.renderer.extensions.get('EXT_frag_depth')) {
-          model_bag.add_bonds(false, this.config.ball_size);
-        } else {
+        if (!this.has_frag_depth()) {
           this.hud('Ball-and-stick rendering is not working in this browser' +
                    '\ndue to lack of suppport for EXT_frag_depth', 'ERR');
+          return;
+        }
+        if (ligand_balls === null) {
+          model_bag.add_bonds(true, false, this.config.ball_size);
+          model_bag.add_bonds(false, true);
+        } else {
+          model_bag.add_bonds(true, true, this.config.ball_size);
         }
         break;
-      case 'trace':  // + lines for ligands
+      case 'trace':
         model_bag.add_trace();
-        model_bag.add_bonds(true);
+        model_bag.add_bonds(false, true, ligand_balls);
         break;
       case 'ribbon':
         model_bag.add_ribbon(8);
-        model_bag.add_bonds(true);
+        model_bag.add_bonds(false, true, ligand_balls);
         break;
     }
     for (let o of model_bag.objects) {
@@ -723,7 +773,8 @@ export class Viewer {
     if (show) {
       if (is_shown) return;
       if (pick.atom == null) return; // silly flow
-      let balls = pick.bag && pick.bag.conf.render_style === 'ball&stick';
+      let atom_style = pick.atom.is_ligand ? 'ligand_style' : 'render_style';
+      let balls = pick.bag && pick.bag.conf[atom_style] === 'ball&stick';
       const label = makeLabel(text, {
         pos: pick.atom.xyz,
         font: this.config.label_font,
@@ -1004,6 +1055,7 @@ export class Viewer {
   }
 
   keydown(evt/*:KeyboardEvent*/) {
+    if (evt.ctrlKey) return;
     const action = this.key_bindings[evt.keyCode];
     if (action) {
       (action.bind(this))(evt);
@@ -1104,11 +1156,11 @@ export class Viewer {
     let kb = this.key_bindings;
     // Home
     kb[36] = function (evt) {
-      evt.ctrlKey ? this.change_map_line(0.1) : this.change_bond_line(0.2);
+      evt.shiftKey ? this.change_map_line(0.1) : this.change_bond_line(0.2);
     };
     // End
     kb[35] = function (evt) {
-      evt.ctrlKey ? this.change_map_line(-0.1) : this.change_bond_line(-0.2);
+      evt.shiftKey ? this.change_map_line(-0.1) : this.change_bond_line(-0.2);
     };
     // Space
     kb[32] = function (evt) { this.center_next_residue(evt.shiftKey); };
@@ -1191,7 +1243,7 @@ export class Viewer {
     if (pick) {
       const atom = pick.atom;
       this.hud(pick.bag.label + ' ' + atom.long_label());
-      this.toggle_label(pick);
+      this.dbl_click_callback(pick);
       const color = this.config.colors[atom.element] || this.config.colors.def;
       const size = 2.5 * scale_by_height(this.config.bond_line,
                                          this.window_size);
@@ -1396,12 +1448,10 @@ export class Viewer {
       // http://stackoverflow.com/questions/7374911/
       req.overrideMimeType('text/plain');
     }
-    for (const name in this.xhr_headers) {
-      if (this.xhr_headers.hasOwnProperty(name)) {
-        req.setRequestHeader(name, this.xhr_headers[name]);
-      }
-    }
     let self = this;
+    Object.keys(this.xhr_headers).forEach(function (name) {
+      req.setRequestHeader(name, self.xhr_headers[name]);
+    });
     req.onreadystatechange = function () {
       if (req.readyState === 4) {
         // chrome --allow-file-access-from-files gives status 0
@@ -1617,7 +1667,8 @@ Viewer.prototype.MOUSE_HELP = [
 Viewer.prototype.KEYBOARD_HELP = [
   '<b>keyboard:</b>',
   'H = toggle help',
-  'T = representation',
+  'T = general style',
+  'L = ligand style',
   'C = coloring',
   'B = bg color',
   'E = toggle fog',
