@@ -100,13 +100,14 @@
             'V hides one of the models. H shows help.');
       });
     }
-    V.set_pdb_and_map_dropzone(V.renderer.domElement);
+    //V.set_pdb_and_map_dropzone(V.renderer.domElement);
+    UM.set_pdb_and_mtz_dropzone(V, V.renderer.domElement);
     var id_match = window.location.href.match(/[?&]id=([^&#]+)/);
     if (id_match) {
       load_from_pdbe(id_match[1].toLowerCase());
     } else {
       V.hud(
-    'Drag and drop your pdb and map (CCP4/DSN6) files to this window.' +
+    'Drag and drop your pdb and map or mtz files to this window.' +
     '\nAlternatively, use PDB code to load files <input type="text"' +
     ' size="5" maxlength="4" minlength="4" pattern="[0-9][0-9a-zA-Z]{3}"' +
     ' value="4UN4" id="pdbid" required' +
