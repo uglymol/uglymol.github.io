@@ -8515,19 +8515,19 @@ ReciprocalViewer.prototype.MOUSE_HELP =
  */
 
 function load_maps_from_mtz_buffer(viewer/*:Viewer*/, mtz_buf/*:ArrayBuffer*/) {
-  //let t0 = performance.now();
+  let t0 = performance.now();
   /* global Module, HEAPF32 */
   var arr = new Uint8Array(mtz_buf);
   var buffer = Module._malloc(arr.length);
   Module.writeArrayToMemory(arr, buffer);
   var mtz = new Module.MtzMap(buffer, arr.length);
-  //let t1 = performance.now();
-  //let t2 = [];
-  //let t3 = [];
+  let t1 = performance.now();
+  let t2 = [];
+  let t3 = [];
   for (var nmap = 0; nmap < 2; ++nmap) {
     var is_diff = (nmap == 1);
     var map_data = mtz.calculate_map(is_diff);
-    //t2.push(performance.now());
+    t2.push(performance.now());
     var map = new ElMap();
     map.unit_cell = new UnitCell(
       mtz.cell_param(0), mtz.cell_param(1), mtz.cell_param(2),
@@ -8538,17 +8538,17 @@ function load_maps_from_mtz_buffer(viewer/*:Viewer*/, mtz_buf/*:ArrayBuffer*/) {
     map.grid = new GridArray([mtz.nz, mtz.ny, mtz.nx]);
     map.grid.values.set(HEAPF32.subarray(map_data/4, map_data/4 + len));
     viewer.add_map(map, is_diff);
-    //t3.push(performance.now());
+    t3.push(performance.now());
   }
   Module._free(buffer);
   mtz.delete();
-  //let t4 = performance.now();
-  //console.log('reading mtz: ' + (t1 - t0) + ' ms.');
-  //console.log('map 1 fft: ' + (t2[0] - t1) + ' ms.');
-  //console.log('map 1 copy: ' + (t3[0] - t2[0]) + ' ms.');
-  //console.log('map 2 fft: ' + (t2[1] - t3[0]) + ' ms.');
-  //console.log('map 2 copy: ' + (t3[1] - t2[1]) + ' ms.');
-  //console.log('total: ' + (t4 - t0) + ' ms.');
+  let t4 = performance.now();
+  console.log('reading mtz: ' + (t1 - t0) + ' ms.');
+  console.log('map 1 fft: ' + (t2[0] - t1) + ' ms.');
+  console.log('map 1 copy: ' + (t3[0] - t2[0]) + ' ms.');
+  console.log('map 2 fft: ' + (t2[1] - t3[0]) + ' ms.');
+  console.log('map 2 copy: ' + (t3[1] - t2[1]) + ' ms.');
+  console.log('total: ' + (t4 - t0) + ' ms.');
 }
 
 function load_maps_from_mtz(viewer/*:Viewer*/, url/*:string*/,
