@@ -107,7 +107,7 @@ const INIT_HUD_TEXT = 'This is UglyMol not Coot. ' +
 
 // options handled by select_next()
 
-const COLOR_PROPS = ['element', 'B-factor', 'occupancy', 'index', 'chain'];
+const COLOR_PROPS = ['element', 'B-factor', 'pLDDT', 'occupancy', 'index', 'chain'];
 const RENDER_STYLES = ['lines', 'trace', 'ribbon', 'ball&stick'];
 const LIGAND_STYLES = ['ball&stick', 'lines'];
 const WATER_STYLES = ['cross', 'dot', 'invisible'];
@@ -143,6 +143,21 @@ function color_by(prop, atoms /*:AtomT[]*/, elem_colors, hue_shift) {
     //console.log('B-factors in [' + vmin + ', ' + vmax + ']');
     color_func = function (atom) {
       return rainbow_value(atom.b, vmin, vmax);
+    };
+  } else if (prop === 'pLDDT') {
+    const steps = [90, 70, 50];
+    const colors = [
+      new Color(0x0053d6), // dark blue
+      new Color(0x65cbf3), // light blue
+      new Color(0xffdb13), // yellow
+      new Color(0xff7d45)  // orange
+    ];
+    color_func = function (atom) {
+      let i = 0;
+      while (i < 3 && atom.b < steps[i]) {
+        ++i;
+      }
+      return colors[i];
     };
   } else if (prop === 'occupancy') {
     color_func = function (atom) {
@@ -447,7 +462,7 @@ export class Viewer {
     };
 
     // options of the constructor overwrite default values of the config
-    for (let o of options) {
+    for (let o of Object.keys(options)) {
       if (o in this.config) {
         this.config[o] = options[o];
       }
@@ -1204,7 +1219,7 @@ export class Viewer {
     // v
     kb[86] = function () { this.toggle_inactive_models(); };
     // y
-    kb[89] = function (evt) {
+    kb[89] = function () {
       this.config.hydrogens = !this.config.hydrogens;
       this.hud((this.config.hydrogens ? 'show' : 'hide') +
                ' hydrogens (if any)');

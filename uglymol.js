@@ -8,8 +8,8 @@
 (function (global, factory) {
 typeof exports === 'object' && typeof module !== 'undefined' ? factory(exports) :
 typeof define === 'function' && define.amd ? define(['exports'], factory) :
-(global = global || self, factory(global.UM = {}));
-}(this, (function (exports) { 'use strict';
+(global = typeof globalThis !== 'undefined' ? globalThis : global || self, factory(global.UM = {}));
+})(this, (function (exports) { 'use strict';
 
 var VERSION = exports.VERSION = '0.7.0';
 
@@ -81,6 +81,7 @@ function multiply(xyz, mat) {
 }
 
 // @flow
+
 
 /*::
  type Num3 = [number, number, number];
@@ -1205,6 +1206,7 @@ function marchingCubes(dims, values, points, isolevel, method) {
 }
 
 // @flow
+
 
 function modulo(a, b) {
   var reminder = a % b;
@@ -3493,7 +3495,7 @@ function generateExtensions( extensions, parameters, rendererExtensions ) {
   return chunks.join( '\n' );
 }
 
-function fetchAttributeLocations( gl, program, identifiers ) {
+function fetchAttributeLocations( gl, program ) {
   var attributes = {};
 
   var n = gl.getProgramParameter( program, gl.ACTIVE_ATTRIBUTES );
@@ -3637,7 +3639,7 @@ function WebGLPrograms( renderer, capabilities ) {
     'fog', 'useFog',
     'premultipliedAlpha' ];
 
-  this.getParameters = function ( material, fog, object ) {
+  this.getParameters = function ( material, fog ) {
     var precision = renderer.getPrecision();
 
     if ( material.precision !== null ) {
@@ -3714,7 +3716,7 @@ function WebGLPrograms( renderer, capabilities ) {
 * @author mrdoob / http://mrdoob.com/
 */
 
-function WebGLGeometries( gl, properties, info ) {
+function WebGLGeometries( gl, properties ) {
   var geometries = {};
 
   function onGeometryDispose( event ) {
@@ -3789,7 +3791,7 @@ function WebGLGeometries( gl, properties, info ) {
 */
 
 function WebGLObjects( gl, properties, info ) {
-  var geometries = new WebGLGeometries( gl, properties, info );
+  var geometries = new WebGLGeometries( gl, properties);
 
   //
 
@@ -3902,7 +3904,7 @@ function WebGLObjects( gl, properties, info ) {
 * @author mrdoob / http://mrdoob.com/
 */
 
-function WebGLTextures( _gl, extensions, state, properties, capabilities, info ) {
+function WebGLTextures( _gl, extensions, state, properties ) {
   function onTextureDispose( event ) {
     var texture = event.target;
 
@@ -4019,7 +4021,7 @@ function WebGLProperties() {
 * @author mrdoob / http://mrdoob.com/
 */
 
-function WebGLState( gl, extensions ) {
+function WebGLState( gl ) {
   function ColorBuffer() {
     var color = new Vector4();
     var currentColorClear = new Vector4();
@@ -4492,7 +4494,7 @@ function WebGLRenderer( parameters ) {
 
   var capabilities = new WebGLCapabilities( _gl, extensions, parameters );
 
-  var state = new WebGLState( _gl, extensions );
+  var state = new WebGLState( _gl);
   var properties = new WebGLProperties();
   var textures = new WebGLTextures( _gl, extensions, state, properties, capabilities, this.info );
   var objects = new WebGLObjects( _gl, properties, this.info );
@@ -5225,7 +5227,7 @@ Scene.prototype.constructor = Scene;
 * @author mrdoob / http://mrdoob.com/
 */
 
-function Line( geometry, material, mode ) {
+function Line( geometry, material ) {
   Object3D.call( this );
 
   this.type = 'Line';
@@ -5283,7 +5285,7 @@ Points.prototype = Object.assign( Object.create( Object3D.prototype ), {
 } );
 
 // kept for compatibility with THREE
-function AmbientLight( color ) {}
+function AmbientLight() {}
 
 
 /**
@@ -5470,6 +5472,7 @@ return Curve.create(
 } )();
 
 // @flow
+
 
 /*:: type Num3 = [number, number, number] */
 /*:: import type {AtomT} from './model.js' */
@@ -6128,6 +6131,7 @@ function addXyzCross(vertices /*:Num3[]*/, xyz /*:Num3*/, r /*:number*/) {
 
 // @flow
 
+
 /*:: import type {OrthographicCamera} from './fromthree.js' */
 
 // map 2d position to sphere with radius 1.
@@ -6388,6 +6392,7 @@ Controls.prototype.go_to = function go_to (targ /*:Vector3*/, cam_pos /*:?Vector
 
 // @flow
 
+
 /*::
  import type {AtomT, Model} from './model.js'
  import type {Mesh} from './fromthree.js'
@@ -6484,7 +6489,7 @@ var INIT_HUD_TEXT = 'This is UglyMol not Coot. ' +
 
 // options handled by select_next()
 
-var COLOR_PROPS = ['element', 'B-factor', 'occupancy', 'index', 'chain'];
+var COLOR_PROPS = ['element', 'B-factor', 'pLDDT', 'occupancy', 'index', 'chain'];
 var RENDER_STYLES = ['lines', 'trace', 'ribbon', 'ball&stick'];
 var LIGAND_STYLES = ['ball&stick', 'lines'];
 var WATER_STYLES = ['cross', 'dot', 'invisible'];
@@ -6520,6 +6525,21 @@ function color_by(prop, atoms /*:AtomT[]*/, elem_colors, hue_shift) {
     //console.log('B-factors in [' + vmin + ', ' + vmax + ']');
     color_func = function (atom) {
       return rainbow_value(atom.b, vmin, vmax);
+    };
+  } else if (prop === 'pLDDT') {
+    var steps = [90, 70, 50];
+    var colors = [
+      new Color(0x0053d6), // dark blue
+      new Color(0x65cbf3), // light blue
+      new Color(0xffdb13), // yellow
+      new Color(0xff7d45)  // orange
+    ];
+    color_func = function (atom) {
+      var i = 0;
+      while (i < 3 && atom.b < steps[i]) {
+        ++i;
+      }
+      return colors[i];
     };
   } else if (prop === 'occupancy') {
     color_func = function (atom) {
@@ -6774,7 +6794,7 @@ var Viewer = function Viewer(options /*: {[key: string]: any}*/) {
   };
 
   // options of the constructor overwrite default values of the config
-  for (var i = 0, list = options; i < list.length; i += 1) {
+  for (var i = 0, list = Object.keys(options); i < list.length; i += 1) {
     var o = list[i];
 
     if (o in this.config) {
@@ -6791,7 +6811,7 @@ var Viewer = function Viewer(options /*: {[key: string]: any}*/) {
   this.dbl_click_callback = this.toggle_label;
   this.scene = new Scene();
   this.scene.fog = new Fog(this.config.colors.bg, 0, 1);
-  this.scene.add(new AmbientLight(0xffffff));
+  this.scene.add(new AmbientLight());
   this.default_camera_pos = [0, 0, 100];
   if (options.share_view) {
     this.target = options.share_view.target;
@@ -7555,7 +7575,7 @@ Viewer.prototype.set_real_space_key_bindings = function set_real_space_key_bindi
   // v
   kb[86] = function () { this.toggle_inactive_models(); };
   // y
-  kb[89] = function (evt) {
+  kb[89] = function () {
     this.config.hydrogens = !this.config.hydrogens;
     this.hud((this.config.hydrogens ? 'show' : 'hide') +
              ' hydrogens (if any)');
@@ -7866,8 +7886,8 @@ Viewer.prototype.set_dropzone = function set_dropzone (zone/*:Object*/, callback
 
         try {
         callback(file);
-      } catch (e) {
-        self.hud('Loading ' + file.name + ' failed.\n' + e.message, 'ERR');
+      } catch (e$1) {
+        self.hud('Loading ' + file.name + ' failed.\n' + e$1.message, 'ERR');
         return;
       }
       names.push(file.name);
@@ -8236,7 +8256,7 @@ var ReciprocalViewer = /*@__PURE__*/(function (Viewer) {
                    : this.change_slab_width_by(0.01);
     };
     // p
-    kb[80] = function (evt) { this.permalink(); };
+    kb[80] = function () { this.permalink(); };
     // s
     kb[83] = function (evt) {
       this.select_next('spot shape', 'spot_shape', SPOT_SHAPES, evt.shiftKey);
@@ -8283,11 +8303,11 @@ var ReciprocalViewer = /*@__PURE__*/(function (Viewer) {
     // down arrow
     kb[40] = function () { this.change_dmax(-0.025); };
     // add, equals/firefox, equal sign
-    kb[107] = kb[61] = kb[187] = function (evt) {
+    kb[107] = kb[61] = kb[187] = function () {
       this.change_isolevel_by(0, 0.01);
     };
     // subtract, minus/firefox, dash
-    kb[109] = kb[173] = kb[189] = function (evt) {
+    kb[109] = kb[173] = kb[189] = function () {
       this.change_isolevel_by(0, -0.01);
     };
     // [
@@ -8423,7 +8443,7 @@ var ReciprocalViewer = /*@__PURE__*/(function (Viewer) {
     }
   };
 
-  ReciprocalViewer.prototype.mousewheel_action = function mousewheel_action (delta/*:number*/, evt/*:Event*/) {
+  ReciprocalViewer.prototype.mousewheel_action = function mousewheel_action (delta/*:number*/) {
     this.change_zoom_by_factor(1 + 0.0005 * delta);
   };
 
@@ -8513,6 +8533,7 @@ ReciprocalViewer.prototype.MOUSE_HELP =
     Viewer.prototype.MOUSE_HELP.split('\n').slice(0, -2).join('\n');
 
 // @flow
+
 
 /*::
  import type {Viewer} from './viewer.js'
@@ -8662,6 +8683,4 @@ exports.makeWheels = makeWheels;
 exports.modelsFromPDB = modelsFromPDB;
 exports.set_pdb_and_mtz_dropzone = set_pdb_and_mtz_dropzone;
 
-Object.defineProperty(exports, '__esModule', { value: true });
-
-})));
+}));
